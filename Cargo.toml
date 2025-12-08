@@ -1,0 +1,21 @@
+[package]
+name = "license"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite", "chrono"] }
+tokio = { version = "1", features = ["full"] }
+teloxide = { version = "0.12", features = ["macros"] }
+axum = "0.7"
+
+serde = { version = "1", features = ["derive"] }
+json = { package = "serde_json", version = "1" }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.19", features = ["v4"] }
+
+dashmap = "5"
+thiserror = "1"
+dotenvy = "0.15"
+
+anyhow = "1.0"
