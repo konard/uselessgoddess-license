@@ -5,11 +5,9 @@ edition = "2024"
 
 [dependencies]
 sqlx = { version = "0.7", features = [
-	"runtime-tokio-rustls", "sqlite", "chrono"
+    "runtime-tokio-rustls", "sqlite", "chrono"
 ] }
-teloxide = { version = "0.17", default-features = false, features = [
-	"macros", 
-] }
+teloxide = { version = "0.17",  features = ["macros"] }
 tokio = { version = "1", features = ["full"] }
 axum = "0.7"
 
