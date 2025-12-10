@@ -1,27 +1,37 @@
 use std::collections::HashSet;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use dashmap::DashMap;
 use sqlx::SqlitePool;
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode};
 use teloxide::Bot;
 use teloxide::prelude::*;
 use teloxide::types::InputFile;
 use tokio::fs;
-use sqlx::sqlite::{SqliteJournalMode, SqliteConnectOptions};
 
 use crate::model::{License, Session};
-use crate::{DateTime, Duration, Utc};
+use crate::prelude::*;
 
 pub type Sessions = DashMap<String, Vec<Session>>;
 
-#[derive(Clone)]
 pub struct App {
   pub db: SqlitePool,
   pub bot: Bot,
   pub admins: HashSet<i64>,
   pub sessions: Sessions,
   pub secret: String,
+  // meta
+  pub backup_hash: AtomicU64,
+}
+
+fn hash_of(bytes: &[u8]) -> u64 {
+  let mut hasher = DefaultHasher::new();
+  bytes.hash(&mut hasher);
+  hasher.finish()
 }
 
 impl App {
@@ -33,11 +43,13 @@ impl App {
   ) -> Self {
     let options = SqliteConnectOptions::from_str(db_url)
       .expect("invalid `DATABASE_URL`")
-      .create_if_missing(true) 
+      .create_if_missing(true)
       .journal_mode(SqliteJournalMode::Wal);
 
+    info!("Connecting to database...");
     let db = SqlitePool::connect_with(options).await.expect("DB fail");
 
+    info!("Running migrations...");
     sqlx::migrate!("./migrations").run(&db).await.expect("Migrations failed");
 
     Self {
@@ -46,7 +58,49 @@ impl App {
       bot: Bot::new(bot_token),
       admins,
       secret,
+      backup_hash: AtomicU64::new(0),
     }
+  }
+
+  pub async fn perform_smart_backup(&self) -> anyhow::Result<()> {
+    let timestamp = chrono::Utc::now().format("%Y-%m-%d_%H-%M-%S");
+    let filename = format!("backup_{}.db", timestamp);
+    let path = Path::new(&filename);
+
+    if path.exists() {
+      let _ = fs::remove_file(path).await;
+    }
+
+    let query = format!("VACUUM INTO '{}'", filename);
+    sqlx::query(&query).execute(&self.db).await?;
+
+    let content = fs::read(path).await?;
+
+    let new_hash = hash_of(&content);
+    let old_hash = self.backup_hash.load(Ordering::Relaxed);
+
+    // FIXME: 0 is hardcoded as fresh start hash
+    if new_hash == old_hash || old_hash == 0 /* fresh start */ {
+      debug!("No changes in DB, skipping backup");
+    } else {
+      for &admin in self.admins.iter() {
+        let doc = InputFile::file(path);
+        let caption = format!(
+          "📦 <b>Database Backup</b>\nChanges detected.\nTime: {}",
+          timestamp
+        );
+
+        let _ = self
+          .bot
+          .send_document(ChatId(admin), doc)
+          .caption(caption)
+          .parse_mode(teloxide::types::ParseMode::Html)
+          .await;
+      }
+    }
+    let _ = fs::remove_file(path).await;
+
+    Ok(())
   }
 
   pub async fn perform_backup(
@@ -54,15 +108,14 @@ impl App {
     chat_id: teloxide::types::ChatId,
   ) -> anyhow::Result<()> {
     let timestamp = chrono::Utc::now().format("%Y-%m-%d_%H-%M-%S");
-    let filename = format!("backup_{}.db", timestamp);
+    let filename = format!("manual_backup_{}.db", timestamp);
 
-    let query = format!("VACUUM INTO '{}'", filename);
-    sqlx::query(&query).execute(&self.db).await?;
+    sqlx::query(&format!("VACUUM INTO '{}'", filename))
+      .execute(&self.db)
+      .await?;
 
     let path = Path::new(&filename);
-    let doc = InputFile::file(path);
-    self.bot.send_document(chat_id, doc).await?;
-
+    let _ = self.bot.send_document(chat_id, InputFile::file(path)).await;
     let _ = fs::remove_file(path).await;
 
     Ok(())

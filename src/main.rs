@@ -1,6 +1,8 @@
+#[allow(irrefutable_let_patterns)]
 mod bot;
 mod handlers;
 mod model;
+mod prelude;
 mod state;
 
 use std::collections::HashSet;
@@ -11,14 +13,25 @@ use std::time::Duration;
 
 use axum::Router;
 use axum::routing::post;
-use chrono::{NaiveDateTime as DateTime, Utc};
 use state::App;
 use teloxide::types::ChatId;
 use tokio::time;
+use tracing_subscriber::EnvFilter;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+
+use crate::prelude::*;
 
 #[tokio::main]
 async fn main() {
   dotenvy::dotenv().ok();
+
+  tracing_subscriber::registry()
+    .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+      "license=debug,tower_http=debug,axum=trace,sqlx=warn".into()
+    }))
+    .with(tracing_subscriber::fmt::layer())
+    .init();
 
   let admins: HashSet<i64> = env::var("ADMIN_IDS")
     .expect("ADMIN_IDS not set")
@@ -29,6 +42,8 @@ async fn main() {
   let db_url = env::var("DATABASE_URL").unwrap_or("sqlite:licenses.db".into());
   let token = env::var("TELOXIDE_TOKEN").expect("No token");
   let secret = env::var("SERVER_SECRET").expect("No secret");
+
+  info!("Starting License Service...");
 
   let app_state = Arc::new(App::new(&db_url, &token, admins, secret).await);
 
@@ -43,10 +58,8 @@ async fn main() {
       let mut interval = time::interval(Duration::from_hours(1));
       loop {
         interval.tick().await;
-        for &admin in backup_app.admins.iter() {
-          if let Err(e) = backup_app.perform_backup(ChatId(admin)).await {
-            eprintln!("Auto-backup failed: {}", e);
-          }
+        if let Err(err) = backup_app.perform_smart_backup().await {
+          error!("Auto-Backup failed: {err}")
         }
       }
     });
@@ -67,12 +80,13 @@ async fn main() {
     }
   });
 
+  // TODO: add layer logging requests
   let app = Router::new()
     .route("/api/heartbeat", post(handlers::heartbeat))
     .with_state(app_state);
 
   let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
-  println!("Server running on {}", addr);
+  info!("Server listening on {}", addr);
 
   let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
   axum::serve(listener, app).await.unwrap();
