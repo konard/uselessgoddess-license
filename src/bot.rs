@@ -36,6 +36,8 @@ trait BotExt {
     chat_id: ChatId,
     text: impl ToString,
   ) -> ResponseResult<()>;
+
+  async fn infer_username(&self, chat_id: ChatId) -> String;
 }
 
 impl BotExt for Bot {
@@ -49,6 +51,21 @@ impl BotExt for Bot {
       .parse_mode(ParseMode::Html)
       .await?;
     Ok(())
+  }
+
+  async fn infer_username(&self, chat_id: ChatId) -> String {
+    match self.get_chat(chat_id).await {
+      Ok(chat) => {
+        if let Some(username) = chat.username() {
+          format!("@{}", username)
+        } else {
+          format!("tg://user?id={}\">", chat_id)
+        }
+      }
+      Err(_) => {
+        format!("<code>{}</code> (API Error)", chat_id)
+      }
+    }
   }
 }
 
@@ -99,11 +116,14 @@ async fn update(
       let active = app.sessions.get(&key).map(|s| s.len()).unwrap_or(0);
 
       match app.license_info(&key).await {
-        Ok(Some(l)) => {
-          let status = if l.is_blocked { "⛔ BLOCKED" } else { "Active" };
+        Ok(Some(license)) => {
+          let status =
+            if license.is_blocked { "⛔ BLOCKED" } else { "Active" };
+          let username = bot.infer_username(ChatId(license.tg_user_id)).await;
+
           let resp = format!(
-            "🔑 <b>Key Info</b>\nOwner: <code>{}</code>\nExpires: {}\nStatus: {}\nActive Sessions: {}",
-            l.tg_user_id, l.expires_at, status, active
+            "🔑 <b>Key Info</b>\nOwner: {}\nExpires: {}\nStatus: {}\nActive Sessions: {}",
+            username, license.expires_at, status, active
           );
           bot.reply_to(msg.chat.id, resp).await?;
         }
@@ -140,8 +160,5 @@ pub async fn run_bot(app: Arc<App>) {
     },
   );
 
-  Dispatcher::builder(bot, handler)
-    .build()
-    .dispatch()
-    .await;
+  Dispatcher::builder(bot, handler).build().dispatch().await;
 }

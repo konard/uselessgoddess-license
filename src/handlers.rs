@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
-use chrono::{NaiveDateTime as DateTime, Utc};
+use chrono::Utc;
 use serde::Serialize;
 
 use crate::model::*;

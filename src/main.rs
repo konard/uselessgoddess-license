@@ -30,8 +30,6 @@ async fn main() {
   let token = env::var("TELOXIDE_TOKEN").expect("No token");
   let secret = env::var("SERVER_SECRET").expect("No secret");
 
-  println!("{token}");
-
   let app_state = Arc::new(App::new(&db_url, &token, admins, secret).await);
 
   let bot_state = app_state.clone();
