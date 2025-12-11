@@ -1,10 +1,10 @@
-use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use chrono::TimeZone;
 use dashmap::DashMap;
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode};
@@ -80,7 +80,9 @@ impl App {
     let old_hash = self.backup_hash.load(Ordering::Relaxed);
 
     // FIXME: 0 is hardcoded as fresh start hash
-    if new_hash == old_hash || old_hash == 0 /* fresh start */ {
+    if new_hash == old_hash || old_hash == 0
+    /* fresh start */
+    {
       debug!("No changes in DB, skipping backup");
     } else {
       for &admin in self.admins.iter() {
@@ -121,9 +123,13 @@ impl App {
     Ok(())
   }
 
-  pub async fn create_license(&self, user_id: i64) -> sqlx::Result<String> {
+  pub async fn create_license(
+    &self,
+    user_id: i64,
+    days: u64,
+  ) -> sqlx::Result<String> {
     let key = uuid::Uuid::new_v4().to_string();
-    let exp = Utc::now().naive_utc();
+    let exp = Utc::now().naive_utc() + Duration::from_hours(24 * days);
 
     sqlx::query!(
       "INSERT INTO licenses (key, tg_user_id, expires_at) VALUES (?, ?, ?)",
@@ -192,4 +198,64 @@ impl App {
       .fetch_optional(&self.db)
       .await
   }
+
+  pub async fn keys_of(&self, user_id: i64) -> Option<Vec<License>> {
+    sqlx::query_as!(
+      License,
+      "SELECT * FROM licenses WHERE tg_user_id = ? AND is_blocked = 0",
+      user_id
+    )
+    .fetch_all(&self.db)
+    .await
+    .ok()
+  }
+
+  pub fn is_promo_active(&self) -> bool {
+    let now = Utc::now();
+
+    // TODO: my fav hardcoded holydays
+    let start = Utc.with_ymd_and_hms(2025, 12, 13, 18, 0, 0).unwrap();
+    let end = Utc.with_ymd_and_hms(2025, 12, 19, 23, 59, 59).unwrap();
+
+    now >= start && now <= end || true
+  }
+
+  pub async fn claim_promo(
+    &self,
+    user_id: i64,
+    promo_name: &str,
+  ) -> sqlx::Result<Promo> {
+    if !self.is_promo_active() {
+      return Ok(Promo::Err("Promo is not active right now."));
+    }
+
+    let exists = sqlx::query!(
+      "SELECT 1 as one FROM claimed_promos WHERE tg_user_id = ? AND promo_name = ?", 
+      user_id, promo_name
+    )
+    .fetch_optional(&self.db)
+    .await?;
+
+    if exists.is_some() {
+      return Ok(Promo::Err("You have already claimed this promo code."));
+    }
+
+    let key = self.create_license(user_id, 1007).await?;
+    let now = Utc::now().naive_utc();
+
+    sqlx::query!(
+      "INSERT INTO claimed_promos (tg_user_id, promo_name, claimed_at) VALUES (?, ?, ?)",
+      user_id, promo_name, now
+    )
+    .execute(&self.db)
+    .await?;
+
+    Ok(Promo::Key(key))
+  }
+}
+
+#[derive(Debug)]
+pub enum Promo {
+  Key(String),
+  Err(&'static str),
 }

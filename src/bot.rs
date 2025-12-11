@@ -1,32 +1,31 @@
-use std::sync::Arc;
-
 use teloxide::prelude::*;
 use teloxide::types::{InputFile, ParseMode};
 use teloxide::utils::command::BotCommands;
 
-use crate::state::App;
+use crate::prelude::*;
+use crate::state::{App, Promo};
+
+fn date(date: DateTime) -> impl std::fmt::Display {
+  date.format("%d.%m.%Y %H:%M")
+}
 
 #[derive(BotCommands, Clone)]
 #[command(rename_rule = "lowercase")]
 enum Command {
-  #[command(description = "help")]
+  // --- PUBLIC COMMANDS ---
+  Start,
+  FreeWeek,
+  MyKey,
   Help,
-  #[command(description = "gen <user_id> (generate expired key)")]
+
+  // --- ADMIN COMMANDS ---
   Gen(i64),
-  #[command(
-    description = "buy <key> <days> (extend license time)",
-    parse_with = "split"
-  )]
+  #[command(parse_with = "split")]
   Buy(String, i64),
-  #[command(description = "ban <key>")]
   Ban(String),
-  #[command(description = "unban <key>")]
   Unban(String),
-  #[command(description = "info <key>")]
   Info(String),
-  #[command(description = "server stats")]
   Stats,
-  #[command(description = "force backup database")]
   Backup,
 }
 
@@ -69,26 +68,117 @@ impl BotExt for Bot {
   }
 }
 
+fn help_text(admin: bool) -> String {
+  let mut text = String::new();
+
+  text.push_str("/start - Start bot\n");
+  text.push_str("/freeweek - 🎁 Try 7 days for free!\n");
+  text.push_str("/mykey - Your licenses\n");
+  text.push_str("/help - Show this menu\n");
+
+  if admin {
+    text.push_str("\n<b>Admin Commands:</b>\n");
+    text.push_str("/gen <id> <days?> - Generate key\n");
+    text.push_str("/buy <key> <days> - Extend key\n");
+    text.push_str("/ban <key> - Block key\n");
+    text.push_str("/unban <key> - Unblock key\n");
+    text.push_str("/info <key> - Key info\n");
+    text.push_str("/stats - Statistics\n");
+    text.push_str("/backup - Download DB\n");
+  }
+
+  text
+}
+
 async fn update(
   app: Arc<App>,
   bot: Bot,
   msg: Message,
   cmd: Command,
 ) -> ResponseResult<()> {
-  if !app.admins.contains(&msg.chat.id.0) {
-    return Ok(());
-  }
-
-  let _ = bot.set_my_commands(Command::bot_commands()).await;
+  let user_id = msg.chat.id.0;
+  let is_admin = app.admins.contains(&user_id);
 
   match cmd {
-    Command::Help => {
-      bot.reply_to(msg.chat.id, Command::descriptions()).await?;
+    Command::Start => {
+      bot
+        .reply_to(
+          msg.chat.id,
+          "Welcome to YACSP! Type /help to see commands.\nContact us here: @y_a_c_s_p",
+        )
+        .await?;
     }
+    Command::Help => {
+      let text = help_text(is_admin);
+      bot.reply_to(msg.chat.id, text).await?;
+    }
+    Command::MyKey => {
+      let now = Utc::now().naive_utc();
+
+      if let Some(mut keys) = app.keys_of(user_id).await
+        && !keys.is_empty()
+      {
+        let mut msg_text = String::from("🔑 <b>Your Keys:</b>\n");
+        keys.sort_by_key(|license| license.expires_at < now);
+
+        for key in keys {
+          let expire = if key.expires_at > now {
+            // TODO: use function
+            let duration = key.expires_at - now;
+            let days = duration.num_days();
+            let hours = duration.num_hours() % 24;
+            let minutes = duration.num_minutes() % 60;
+
+            format!("Time left: {days}d {hours}h {minutes}m")
+          } else {
+            "Expired!".to_string()
+          };
+          msg_text.push_str(&format!("\n<code>{}</code>\n{expire}", key.key,));
+        }
+        bot.reply_to(msg.chat.id, msg_text).await?;
+      } else {
+        bot.reply_to(msg.chat.id, "You have no active keys.").await?
+      }
+    }
+    Command::FreeWeek => {
+      let promo_name = "first_promo"; // i swear
+
+      if let Ok(promo) = app.claim_promo(user_id, promo_name).await {
+        match promo {
+          Promo::Key(key) => {
+            let message = format!(
+              "🎉 <b>Success!</b>\nHere is your FREE week license:\n \
+              <code>{key}</code>\n\n \
+              Download software here: ..."
+            );
+            bot.reply_to(msg.chat.id, message).await?;
+          }
+          Promo::Err(err) => bot.reply_to(msg.chat.id, err).await?,
+        }
+      }
+    }
+    _ => {}
+  }
+
+  if is_admin {
+    let _ = bot.set_my_commands(Command::bot_commands()).await;
+    admin_space(app, bot, msg, cmd).await?;
+  }
+
+  Ok(())
+}
+
+async fn admin_space(
+  app: Arc<App>,
+  bot: Bot,
+  msg: Message,
+  cmd: Command,
+) -> ResponseResult<()> {
+  match cmd {
     Command::Gen(user_id) => {
-      let license = app.create_license(user_id).await;
+      let license = app.create_license(user_id, 0).await;
       let message = license
-        .map(|key| format!("Key: <code>{}</code>", key))
+        .map(|key| format!("<code>{}</code>", key))
         .unwrap_or_else(|err| format!("DB Error: {err}"));
       bot.reply_to(msg.chat.id, message).await?;
     }
@@ -96,7 +186,8 @@ async fn update(
       Ok(new_exp) => {
         let message = format!(
           "Key extended by {} days.\nNew expiry: <code>{}</code>",
-          days, new_exp
+          days,
+          date(new_exp)
         );
         bot.reply_to(msg.chat.id, message).await?
       }
@@ -123,7 +214,10 @@ async fn update(
 
           let resp = format!(
             "🔑 <b>Key Info</b>\nOwner: {}\nExpires: {}\nStatus: {}\nActive Sessions: {}",
-            username, license.expires_at, status, active
+            username,
+            date(license.expires_at),
+            status,
+            active
           );
           bot.reply_to(msg.chat.id, resp).await?;
         }
@@ -147,8 +241,10 @@ async fn update(
         bot.send_document(msg.chat.id, InputFile::file("licenses.db")).await?;
       }
     }
+    _ => {}
   };
-  respond(())
+
+  Ok(())
 }
 
 pub async fn run_bot(app: Arc<App>) {

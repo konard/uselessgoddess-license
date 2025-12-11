@@ -14,7 +14,6 @@ use std::time::Duration;
 use axum::Router;
 use axum::routing::post;
 use state::App;
-use teloxide::types::ChatId;
 use tokio::time;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
