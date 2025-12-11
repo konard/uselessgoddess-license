@@ -69,7 +69,7 @@ impl BotExt for Bot {
 }
 
 fn help_text(admin: bool) -> String {
-  let mut text = String::from("<b>YACSP Panel</b>\n\n");
+  let mut text = String::from("<b>YACS Panel</b>\n\n");
 
   text.push_str("/start - Start bot\n");
   text.push_str("/freeweek - 🎁 Try week for free!\n");

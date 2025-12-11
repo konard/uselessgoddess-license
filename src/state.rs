@@ -216,8 +216,8 @@ impl App {
     let now = Utc::now();
 
     // TODO: my fav hardcoded holydays
-    let start = Utc.with_ymd_and_hms(2025, 12, 13, 18, 0, 0).unwrap();
-    let end = Utc.with_ymd_and_hms(2025, 12, 19, 23, 59, 59).unwrap();
+    let start = Utc.with_ymd_and_hms(2025, 12, 14, 18, 0, 0).unwrap();
+    let end = Utc.with_ymd_and_hms(2025, 12, 21, 23, 59, 59).unwrap();
 
     now >= start && now <= end
   }
