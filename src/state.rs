@@ -219,7 +219,7 @@ impl App {
     let start = Utc.with_ymd_and_hms(2025, 12, 13, 18, 0, 0).unwrap();
     let end = Utc.with_ymd_and_hms(2025, 12, 19, 23, 59, 59).unwrap();
 
-    now >= start && now <= end || true
+    now >= start && now <= end
   }
 
   pub async fn claim_promo(
