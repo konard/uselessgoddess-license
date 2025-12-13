@@ -1,18 +1,16 @@
-//! API handlers with rate limiting
-
 use std::sync::Arc;
 
-use axum::extract::State;
-use axum::http::StatusCode;
-use axum::Json;
+use axum::{Json, extract::State, http::StatusCode};
+use base64::Engine;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
-use crate::error::AppError;
-use crate::services::{LicenseService, StatsService};
-use crate::state::{AppState, Session};
+use crate::{
+  error::Error,
+  state::{AppState, Session},
+  sv::Stats,
+};
 
-/// Heartbeat request from CS2 panel
 #[derive(Debug, Deserialize)]
 pub struct HeartbeatReq {
   pub key: String,
@@ -23,7 +21,6 @@ pub struct HeartbeatReq {
   pub stats: Option<String>,
 }
 
-/// Heartbeat response
 #[derive(Debug, Serialize)]
 pub struct HeartbeatRes {
   pub success: bool,
@@ -35,23 +32,14 @@ pub struct HeartbeatRes {
 
 impl HeartbeatRes {
   pub fn ok(magic: i64) -> Self {
-    Self {
-      success: true,
-      message: None,
-      magic_token: Some(magic),
-    }
+    Self { success: true, message: None, magic_token: Some(magic) }
   }
 
   pub fn invalid(message: impl Into<String>) -> Self {
-    Self {
-      success: false,
-      message: Some(message.into()),
-      magic_token: None,
-    }
+    Self { success: false, message: Some(message.into()), magic_token: None }
   }
 }
 
-/// Generate magic token for session validation
 fn generate_magic(session_id: &str, secret: &str) -> i64 {
   let combined = format!("{}{}", session_id, secret);
   let mut hash: u64 = 0xcbf29ce484222325; // FNV-1a offset basis
@@ -62,7 +50,6 @@ fn generate_magic(session_id: &str, secret: &str) -> i64 {
   hash as i64
 }
 
-/// Heartbeat endpoint - called every minute by CS2 panel
 pub async fn heartbeat(
   State(app): State<Arc<AppState>>,
   Json(req): Json<HeartbeatReq>,
@@ -70,25 +57,25 @@ pub async fn heartbeat(
   let now = Utc::now().naive_utc();
   let magic = generate_magic(&req.session_id, &app.secret);
 
-  // Check if session already exists (fast path)
   if let Some(mut sessions) = app.sessions.get_mut(&req.key) {
-    if let Some(sess) = sessions.iter_mut().find(|s| s.session_id == req.session_id) {
+    if let Some(sess) =
+      sessions.iter_mut().find(|s| s.session_id == req.session_id)
+    {
       sess.last_seen = now;
       return (StatusCode::OK, Json(HeartbeatRes::ok(magic)));
     }
   }
 
-  // Validate license with database
-  let license = match LicenseService::validate(&app.db, &req.key).await {
-    Ok(l) => l,
-    Err(AppError::LicenseNotFound) => {
+  let license = match app.sv().license.validate(&req.key).await {
+    Ok(license) => license,
+    Err(Error::LicenseNotFound) => {
       app.drop_sessions(&req.key);
       return (
         StatusCode::UNAUTHORIZED,
         Json(HeartbeatRes::invalid("Invalid license")),
       );
     }
-    Err(AppError::LicenseInvalid) => {
+    Err(Error::LicenseInvalid) => {
       app.drop_sessions(&req.key);
       return (
         StatusCode::FORBIDDEN,
@@ -103,27 +90,11 @@ pub async fn heartbeat(
     }
   };
 
-  // HWID locking check
-  if let Some(ref bound_hwid) = license.hwid_hash {
-    if bound_hwid != &req.machine_id {
-      return (
-        StatusCode::FORBIDDEN,
-        Json(HeartbeatRes::invalid("HWID mismatch")),
-      );
-    }
-  } else {
-    // First use - bind HWID
-    let _ = LicenseService::bind_hwid(&app.db, &req.key, &req.machine_id).await;
-  }
-
-  // Get or create session list
   let mut entry = app.sessions.entry(req.key.clone()).or_insert_with(Vec::new);
+  entry.retain(|s| {
+    (now - s.last_seen).num_seconds() < app.config.session_lifetime
+  });
 
-  // Thin GC - remove stale sessions
-  let timeout = app.config.session_timeout_secs;
-  entry.retain(|s| (now - s.last_seen).num_seconds() < timeout);
-
-  // Check session limit
   let max_sessions = license.max_sessions as usize;
   if entry.len() >= max_sessions {
     return (
@@ -136,19 +107,18 @@ pub async fn heartbeat(
     );
   }
 
-  // Add new session
   entry.push(Session {
     session_id: req.session_id,
     hwid_hash: Some(req.machine_id),
     last_seen: now,
   });
 
-  // Process stats if provided
   if let Some(stats_b64) = req.stats {
-    if let Ok(compressed) = base64_decode(&stats_b64) {
-      if let Ok(stats) = StatsService::decompress_stats(&compressed) {
-        let active = entry.len() as i32;
-        let _ = StatsService::update_from_telemetry(&app.db, license.tg_user_id, &stats, active)
+    if let Some(compressed) = base64_decode(&stats_b64) {
+      if let Ok(stats) = Stats::decompress_stats(&compressed) {
+        let active = entry.len() as u32;
+        let _ = (app.sv().stats)
+          .update_from_telemetry(license.tg_user_id, &stats, active)
           .await;
       }
     }
@@ -157,32 +127,10 @@ pub async fn heartbeat(
   (StatusCode::OK, Json(HeartbeatRes::ok(magic)))
 }
 
-fn base64_decode(input: &str) -> Result<Vec<u8>, ()> {
-  // Simple base64 decode without external dependency
-  const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-  let input = input.trim_end_matches('=');
-  let mut output = Vec::with_capacity(input.len() * 3 / 4);
-
-  let mut buffer = 0u32;
-  let mut bits = 0;
-
-  for c in input.bytes() {
-    let val = ALPHABET.iter().position(|&x| x == c).ok_or(())? as u32;
-    buffer = (buffer << 6) | val;
-    bits += 6;
-
-    if bits >= 8 {
-      bits -= 8;
-      output.push((buffer >> bits) as u8);
-      buffer &= (1 << bits) - 1;
-    }
-  }
-
-  Ok(output)
+fn base64_decode(input: &str) -> Option<Vec<u8>> {
+  base64::prelude::BASE64_STANDARD.decode(input).ok()
 }
 
-/// Stats submission endpoint
 #[derive(Debug, Deserialize)]
 pub struct StatsReq {
   pub key: String,
@@ -202,8 +150,7 @@ pub async fn submit_stats(
   State(app): State<Arc<AppState>>,
   Json(req): Json<StatsReq>,
 ) -> (StatusCode, Json<StatsRes>) {
-  // Validate license
-  let license = match LicenseService::validate(&app.db, &req.key).await {
+  let license = match app.sv().license.validate(&req.key).await {
     Ok(l) => l,
     Err(_) => {
       return (
@@ -216,7 +163,6 @@ pub async fn submit_stats(
     }
   };
 
-  // Verify session exists
   let session_valid = app
     .sessions
     .get(&req.key)
@@ -233,29 +179,19 @@ pub async fn submit_stats(
     );
   }
 
-  // Decompress and process stats
   match base64_decode(&req.data) {
-    Ok(compressed) => match StatsService::decompress_stats(&compressed) {
+    Some(compressed) => match Stats::decompress_stats(&compressed) {
       Ok(stats) => {
-        let active = app
-          .sessions
-          .get(&req.key)
-          .map(|s| s.len())
-          .unwrap_or(0) as i32;
+        let active = app.sessions.get(&req.key).map(|s| s.len()).unwrap_or(0);
 
-        if let Err(e) =
-          StatsService::update_from_telemetry(&app.db, license.tg_user_id, &stats, active).await
+        if let Err(e) = (app.sv().stats)
+          .update_from_telemetry(license.tg_user_id, &stats, active as u32)
+          .await
         {
           tracing::warn!("Failed to update stats: {}", e);
         }
 
-        (
-          StatusCode::OK,
-          Json(StatsRes {
-            success: true,
-            message: None,
-          }),
-        )
+        (StatusCode::OK, Json(StatsRes { success: true, message: None }))
       }
       Err(e) => (
         StatusCode::BAD_REQUEST,
@@ -265,7 +201,7 @@ pub async fn submit_stats(
         }),
       ),
     },
-    Err(_) => (
+    None => (
       StatusCode::BAD_REQUEST,
       Json(StatsRes {
         success: false,
@@ -275,7 +211,6 @@ pub async fn submit_stats(
   }
 }
 
-/// Health check endpoint
 pub async fn health() -> &'static str {
   "OK"
 }

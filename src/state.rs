@@ -1,54 +1,54 @@
-//! Application state with dependency injection
+use std::{
+  collections::{HashSet, hash_map::DefaultHasher},
+  hash::{Hash, Hasher},
+  path::Path,
+  sync::atomic::{AtomicU64, Ordering},
+};
 
-use std::collections::hash_map::DefaultHasher;
-use std::collections::HashSet;
-use std::hash::{Hash, Hasher};
-use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
-
-use chrono::Utc;
-use dashmap::DashMap;
-use sea_orm::{ConnectionTrait, Database, DatabaseConnection};
-use sea_orm_migration::MigratorTrait;
-use teloxide::Bot;
-use teloxide::prelude::*;
-use teloxide::types::InputFile;
+use teloxide::{
+  Bot,
+  prelude::*,
+  types::{InputFile, ParseMode},
+};
 use tokio::fs;
 use tracing::{debug, error, info};
 
-use crate::migration::Migrator;
+use crate::{migration::Migrator, prelude::*, sv};
 
-/// Session tracking for active connections
 #[derive(Debug, Clone)]
 pub struct Session {
   pub session_id: String,
   pub hwid_hash: Option<String>,
-  pub last_seen: chrono::NaiveDateTime,
+  pub last_seen: DateTime,
 }
 
 pub type Sessions = DashMap<String, Vec<Session>>;
 
-/// Application configuration
 #[derive(Debug, Clone)]
 pub struct Config {
-  pub max_sessions_per_license: i32,
-  pub session_timeout_secs: i64,
-  pub backup_interval_hours: u64,
   pub builds_directory: String,
+  pub session_lifetime: i64,
+  pub backup_hours: u64,
 }
 
 impl Default for Config {
   fn default() -> Self {
     Self {
-      max_sessions_per_license: 5,
-      session_timeout_secs: 120,
-      backup_interval_hours: 1,
-      builds_directory: "./builds".to_string(),
+      builds_directory: String::from("./builds"),
+
+      session_lifetime: 120,
+      backup_hours: 1,
     }
   }
 }
 
-/// Main application state
+pub struct Services<'a> {
+  pub user: sv::User<'a>,
+  pub stats: sv::Stats<'a>,
+  pub build: sv::Build<'a>,
+  pub license: sv::License<'a>,
+}
+
 pub struct AppState {
   pub db: DatabaseConnection,
   pub bot: Bot,
@@ -73,7 +73,8 @@ impl AppState {
     admins: HashSet<i64>,
     secret: String,
   ) -> Self {
-    Self::with_config(db_url, bot_token, admins, secret, Config::default()).await
+    Self::with_config(db_url, bot_token, admins, secret, Config::default())
+      .await
   }
 
   pub async fn with_config(
@@ -84,7 +85,8 @@ impl AppState {
     config: Config,
   ) -> Self {
     info!("Connecting to database...");
-    let db = Database::connect(db_url).await.expect("Failed to connect to database");
+    let db =
+      Database::connect(db_url).await.expect("Failed to connect to database");
 
     info!("Running migrations...");
     Migrator::up(&db, None).await.expect("Failed to run migrations");
@@ -100,7 +102,15 @@ impl AppState {
     }
   }
 
-  /// Perform smart backup (only if DB changed)
+  pub fn sv(&self) -> Services<'_> {
+    Services {
+      user: sv::User::new(&self.db),
+      stats: sv::Stats::new(&self.db),
+      build: sv::Build::new(&self.db),
+      license: sv::License::new(&self.db),
+    }
+  }
+
   pub async fn perform_smart_backup(&self) -> anyhow::Result<()> {
     let timestamp = Utc::now().format("%Y-%m-%d_%H-%M-%S");
     let filename = format!("backup_{}.db", timestamp);
@@ -110,7 +120,6 @@ impl AppState {
       let _ = fs::remove_file(path).await;
     }
 
-    // SQLite VACUUM INTO for safe backup
     let query = format!("VACUUM INTO '{}'", filename);
     self
       .db
@@ -127,7 +136,6 @@ impl AppState {
 
     self.backup_hash.store(new_hash, Ordering::Relaxed);
 
-    // Skip if unchanged or first run
     if new_hash == old_hash || old_hash == 0 {
       debug!("No changes in DB, skipping backup notification");
     } else {
@@ -142,7 +150,7 @@ impl AppState {
           .bot
           .send_document(ChatId(admin), doc)
           .caption(caption)
-          .parse_mode(teloxide::types::ParseMode::Html)
+          .parse_mode(ParseMode::Html)
           .await;
       }
     }
@@ -151,7 +159,6 @@ impl AppState {
     Ok(())
   }
 
-  /// Force backup to specific chat
   pub async fn perform_backup(&self, chat_id: ChatId) -> anyhow::Result<()> {
     let timestamp = Utc::now().format("%Y-%m-%d_%H-%M-%S");
     let filename = format!("manual_backup_{}.db", timestamp);
@@ -172,10 +179,9 @@ impl AppState {
     Ok(())
   }
 
-  /// Clean up stale sessions
   pub fn gc_sessions(&self) {
     let now = Utc::now().naive_utc();
-    let timeout = self.config.session_timeout_secs;
+    let timeout = self.config.session_lifetime;
 
     self.sessions.retain(|_key, sessions| {
       sessions.retain(|s| (now - s.last_seen).num_seconds() < timeout);
@@ -183,15 +189,7 @@ impl AppState {
     });
   }
 
-  /// Drop all sessions for a license key
   pub fn drop_sessions(&self, key: &str) {
     self.sessions.remove(key);
   }
-}
-
-/// Promo result enum for backwards compatibility
-#[derive(Debug)]
-pub enum Promo {
-  Key(String),
-  Err(&'static str),
 }

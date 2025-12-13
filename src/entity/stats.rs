@@ -1,30 +1,32 @@
-//! ClaimedPromo entity - tracks which promos users have claimed
-
-use chrono::NaiveDateTime;
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use super::user;
+
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
-#[sea_orm(table_name = "claimed_promos")]
+#[sea_orm(table_name = "user_stats")]
 pub struct Model {
   #[sea_orm(primary_key, auto_increment = false)]
   pub tg_user_id: i64,
-  #[sea_orm(primary_key, auto_increment = false)]
-  pub promo_name: String,
-  pub claimed_at: NaiveDateTime,
+  pub weekly_xp: u64,
+  pub total_xp: u64,
+  pub drops_count: u32,
+  pub runtime_hours: f64,
+  pub instances: u32,
+  pub last_updated: DateTime,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
   #[sea_orm(
-    belongs_to = "super::user::Entity",
+    belongs_to = "user::Entity",
     from = "Column::TgUserId",
-    to = "super::user::Column::TgUserId"
+    to = "user::Column::TgUserId"
   )]
   User,
 }
 
-impl Related<super::user::Entity> for Entity {
+impl Related<user::Entity> for Entity {
   fn to() -> RelationDef {
     Relation::User.def()
   }

@@ -11,10 +11,17 @@ impl MigrationTrait for Migration {
         Table::create()
           .table(Users::Table)
           .if_not_exists()
-          .col(ColumnDef::new(Users::TgUserId).big_integer().not_null().primary_key())
+          .col(
+            ColumnDef::new(Users::TgUserId)
+              .big_integer()
+              .not_null()
+              .primary_key(),
+          )
           .col(ColumnDef::new(Users::Username).string().null())
           .col(ColumnDef::new(Users::RegDate).date_time().not_null())
-          .col(ColumnDef::new(Users::IsAdmin).boolean().not_null().default(false))
+          .col(
+            ColumnDef::new(Users::IsAdmin).boolean().not_null().default(false),
+          )
           .to_owned(),
       )
       .await

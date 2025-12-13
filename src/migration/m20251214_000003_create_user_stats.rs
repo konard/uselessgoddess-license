@@ -13,12 +13,42 @@ impl MigrationTrait for Migration {
         Table::create()
           .table(UserStats::Table)
           .if_not_exists()
-          .col(ColumnDef::new(UserStats::TgUserId).big_integer().not_null().primary_key())
-          .col(ColumnDef::new(UserStats::WeeklyXp).big_integer().not_null().default(0))
-          .col(ColumnDef::new(UserStats::TotalXp).big_integer().not_null().default(0))
-          .col(ColumnDef::new(UserStats::DropsCount).integer().not_null().default(0))
-          .col(ColumnDef::new(UserStats::ActiveInstances).integer().not_null().default(0))
-          .col(ColumnDef::new(UserStats::TotalRuntimeHours).double().not_null().default(0.0))
+          .col(
+            ColumnDef::new(UserStats::TgUserId)
+              .big_integer()
+              .not_null()
+              .primary_key(),
+          )
+          .col(
+            ColumnDef::new(UserStats::WeeklyXp)
+              .big_integer()
+              .not_null()
+              .default(0),
+          )
+          .col(
+            ColumnDef::new(UserStats::TotalXp)
+              .big_integer()
+              .not_null()
+              .default(0),
+          )
+          .col(
+            ColumnDef::new(UserStats::DropsCount)
+              .integer()
+              .not_null()
+              .default(0),
+          )
+          .col(
+            ColumnDef::new(UserStats::ActiveInstances)
+              .integer()
+              .not_null()
+              .default(0),
+          )
+          .col(
+            ColumnDef::new(UserStats::TotalRuntimeHours)
+              .double()
+              .not_null()
+              .default(0.0),
+          )
           .col(ColumnDef::new(UserStats::LastUpdated).date_time().not_null())
           .foreign_key(
             ForeignKey::create()

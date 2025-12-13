@@ -22,10 +22,20 @@ impl MigrationTrait for Migration {
               .default("trial"),
           )
           .col(ColumnDef::new(Licenses::ExpiresAt).date_time().not_null())
-          .col(ColumnDef::new(Licenses::IsBlocked).boolean().not_null().default(false))
+          .col(
+            ColumnDef::new(Licenses::IsBlocked)
+              .boolean()
+              .not_null()
+              .default(false),
+          )
           .col(ColumnDef::new(Licenses::CreatedAt).date_time().not_null())
           .col(ColumnDef::new(Licenses::HwidHash).string().null())
-          .col(ColumnDef::new(Licenses::MaxSessions).integer().not_null().default(5))
+          .col(
+            ColumnDef::new(Licenses::MaxSessions)
+              .integer()
+              .not_null()
+              .default(5),
+          )
           .foreign_key(
             ForeignKey::create()
               .name("fk_licenses_user")
