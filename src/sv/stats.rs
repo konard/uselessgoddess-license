@@ -109,11 +109,11 @@ impl<'a> Stats<'a> {
     let now = Utc::now().naive_utc();
 
     stats::ActiveModel {
-      weekly_xp: Set(model.weekly_xp + stats.farming.xp_gained),
-      total_xp: Set(model.total_xp + stats.farming.xp_gained),
-      drops_count: Set(model.drops_count + stats.farming.drops),
+      weekly_xp: Set(model.weekly_xp + stats.farming.xp_gained as i64),
+      total_xp: Set(model.total_xp + stats.farming.xp_gained as i64),
+      drops_count: Set(model.drops_count + stats.farming.drops as i32),
       runtime_hours: Set(model.runtime_hours + stats.uptime as f64 / 3600.0),
-      instances: Set(instances),
+      instances: Set(instances as i32),
       last_updated: Set(now),
       ..model.into()
     }
@@ -130,10 +130,10 @@ impl<'a> Stats<'a> {
     let stats = self.get_or_create(tg_user_id).await?;
 
     Ok(UserStatsDisplay {
-      weekly_xp: stats.weekly_xp,
-      total_xp: stats.total_xp,
-      drops_count: stats.drops_count,
-      instances: stats.instances,
+      weekly_xp: stats.weekly_xp as u64,
+      total_xp: stats.total_xp as u64,
+      drops_count: stats.drops_count as u32,
+      instances: stats.instances as u32,
       runtime_hours: stats.runtime_hours,
     })
   }

@@ -193,7 +193,7 @@ impl BotExt for Bot {
 }
 
 fn help_text(is_admin: bool) -> String {
-  let mut text = String::from("<b>🎮 YACS Panel</b>\n\n");
+  let mut text = String::from("<b>YACS Panel</b>\n\n");
   text.push_str("<b>Commands:</b>\n");
   text.push_str("/start - Open main menu\n");
   text.push_str("/freeweek - Get free trial\n");
@@ -347,33 +347,26 @@ async fn handle_admin_command(
         Err(e) => Err(e.to_string()),
       }
     }
-
-    Command::Stats => {
-      handle_stats_view(&app, &bot, msg.chat.id).await?;
-      return Ok(());
-    }
-
     Command::Backup => {
       if app.perform_backup(msg.chat.id).await.is_err() {
         bot.send_document(msg.chat.id, InputFile::file("licenses.db")).await?;
       }
       return Ok(());
     }
-
     Command::Builds => match sv.build.all().await {
       Ok(builds) if !builds.is_empty() => {
-        let mut text = String::from("📦 <b>All Builds:</b>\n");
+        let mut text = String::from("<b>All Builds:</b>\n");
         for build in builds {
           let status = if build.is_active { "✅" } else { "❌" };
           text.push_str(&format!(
-            "\n{} <b>v{}</b>\n📥 {} downloads\n📅 {}\n",
+            "\n{} <b>v{}</b>\n{} downloads\n{}\n",
             status,
             build.version,
             build.downloads,
             format_date(build.created_at)
           ));
           if let Some(changelog) = &build.changelog {
-            text.push_str(&format!("📝 {}\n", changelog));
+            text.push_str(&format!("<code>{}</code>\n", changelog));
           }
         }
         bot.reply_with_keyboard(msg.chat.id, text, back_keyboard()).await?;
@@ -528,7 +521,20 @@ async fn handle_callback(
       handle_trial_claim(&sv, &bot, chat_id, user_id).await?;
     }
     CB_DOWNLOAD => {
-      handle_download(&sv, &bot, chat_id, message_id).await?;
+      if let Ok(keys) = sv.license.by_user(chat_id.0, false).await
+        && !keys.is_empty()
+      {
+        handle_download(&sv, &bot, chat_id, message_id).await?;
+      } else {
+        bot
+          .edit_with_keyboard(
+            chat_id,
+            message_id,
+            "You have no active license!",
+            back_keyboard(),
+          )
+          .await?;
+      }
     }
     CB_BACK => {
       let text = "<b>Yet Another Counter Strike Panel!</b>\n\n\
@@ -553,13 +559,15 @@ async fn handle_callback(
         .await?;
     }
     CB_STATS => {
-      if !is_admin {
-        return Ok(());
-      }
-      let text = build_stats_text(&app).await;
-      bot
-        .edit_with_keyboard(chat_id, message_id, text, admin_keyboard())
-        .await?;
+      let active_keys = app.sessions.len();
+      let total_sessions: usize =
+        app.sessions.iter().map(|e| e.value().len()).sum();
+
+      let message = format!(
+        "📊 <b>System Stats</b>\nActive Keys: {}\nTotal Windows: {}",
+        active_keys, total_sessions
+      );
+      bot.reply_html(chat_id, message).await?;
     }
     CB_BACKUP => {
       if !is_admin {
@@ -649,12 +657,12 @@ async fn handle_license_view(
     }
     _ => {
       bot
-                .reply_with_keyboard(
-                    chat_id,
-                    "❌ You have no active licenses.\n\nTry /freeweek to get a free trial!",
-                    back_keyboard(),
-                )
-                .await?;
+        .reply_with_keyboard(
+          chat_id,
+          "You have no active license!",
+          back_keyboard(),
+        )
+        .await?;
     }
   }
 
@@ -693,13 +701,13 @@ async fn handle_license_edit(
     }
     _ => {
       bot
-                .edit_with_keyboard(
-                    chat_id,
-                    message_id,
-                    "❌ You have no active licenses.\n\nTry /freeweek to get a free trial!",
-                    back_keyboard(),
-                )
-                .await?;
+        .edit_with_keyboard(
+          chat_id,
+          message_id,
+          "You have no active license!",
+          back_keyboard(),
+        )
+        .await?;
     }
   }
 
@@ -727,11 +735,9 @@ async fn handle_trial_claim(
     }
     Err(e) => {
       let msg = match e {
-        Error::Promo(Promo::Inactive) => "⏳ Promo is not active right now.",
-        Error::Promo(Promo::Claimed) => {
-          "❌ You have already claimed this promo"
-        }
-        _ => "❌ An error occurred.",
+        Error::Promo(Promo::Inactive) => "Promo is not active right now.",
+        Error::Promo(Promo::Claimed) => "You have already claimed this promo",
+        _ => "An error occurred.",
       };
       bot.reply_with_keyboard(chat_id, msg, back_keyboard()).await?;
     }
@@ -752,10 +758,9 @@ async fn handle_download(
       if path.exists() {
         let doc = InputFile::file(path);
         let caption = format!(
-          "📥 <b>YACS Panel v{}</b>\n\n{}\n\nDownloads: {}",
+          "<b>YACS Panel v{}</b>\n\n{}",
           build.version,
           build.changelog.unwrap_or_default(),
-          build.downloads
         );
 
         bot
@@ -788,72 +793,6 @@ async fn handle_download(
     }
   }
 
-  Ok(())
-}
-
-async fn build_stats_text(app: &AppState) -> String {
-  let sv = app.sv();
-
-  let active_keys = app.sessions.len();
-  let total_sessions: usize =
-    app.sessions.iter().map(|e| e.value().len()).sum();
-
-  let total_users = sv.user.count().await.unwrap_or(0);
-  let total_licenses = sv.license.count().await.unwrap_or(0);
-  let active_licenses = sv.license.count_active().await.unwrap_or(0);
-  let total_builds = sv.build.count().await.unwrap_or(0);
-  let total_downloads = sv.build.total_downloads().await.unwrap_or(0);
-
-  let farming_stats = sv.stats.aggregate().await.ok();
-
-  let mut text = format!(
-    "📊 <b>System Stats</b>\n\n\
-    <b>🔌 Runtime:</b>\n\
-    Active Keys: {}\n\
-    Total Sessions: {}\n\n\
-    <b>👥 Users:</b>\n\
-    Total Registered: {}\n\n\
-    <b>🔑 Licenses:</b>\n\
-    Total: {}\n\
-    Active: {}\n\n\
-    <b>📦 Builds:</b>\n\
-    Total: {}\n\
-    Downloads: {}",
-    active_keys,
-    total_sessions,
-    total_users,
-    total_licenses,
-    active_licenses,
-    total_builds,
-    total_downloads
-  );
-
-  if let Some(stats) = farming_stats {
-    text.push_str(&format!(
-      "\n\n<b>🌾 Farming (aggregated):</b>\n\
-      Weekly XP: {}\n\
-      Total XP: {}\n\
-      Total Drops: {}\n\
-      Runtime: {:.1}h\n\
-      Active Instances: {}",
-      stats.weekly_xp,
-      stats.total_xp,
-      stats.total_drops,
-      stats.total_runtime_hours,
-      stats.active_instances
-    ));
-  }
-
-  text
-}
-
-async fn handle_stats_view(
-  app: &AppState,
-  bot: &Bot,
-  chat_id: ChatId,
-) -> ResponseResult<()> {
-  let text = build_stats_text(app).await;
-  bot.reply_with_keyboard(chat_id, text, back_keyboard()).await?;
   Ok(())
 }
 

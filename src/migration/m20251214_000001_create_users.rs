@@ -17,11 +17,7 @@ impl MigrationTrait for Migration {
               .not_null()
               .primary_key(),
           )
-          .col(ColumnDef::new(Users::Username).string().null())
           .col(ColumnDef::new(Users::RegDate).date_time().not_null())
-          .col(
-            ColumnDef::new(Users::IsAdmin).boolean().not_null().default(false),
-          )
           .to_owned(),
       )
       .await
@@ -36,7 +32,5 @@ impl MigrationTrait for Migration {
 pub enum Users {
   Table,
   TgUserId,
-  Username,
   RegDate,
-  IsAdmin,
 }

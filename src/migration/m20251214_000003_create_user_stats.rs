@@ -38,13 +38,13 @@ impl MigrationTrait for Migration {
               .default(0),
           )
           .col(
-            ColumnDef::new(UserStats::ActiveInstances)
+            ColumnDef::new(UserStats::Instances)
               .integer()
               .not_null()
               .default(0),
           )
           .col(
-            ColumnDef::new(UserStats::TotalRuntimeHours)
+            ColumnDef::new(UserStats::RuntimeHours)
               .double()
               .not_null()
               .default(0.0),
@@ -74,7 +74,7 @@ pub enum UserStats {
   WeeklyXp,
   TotalXp,
   DropsCount,
-  ActiveInstances,
-  TotalRuntimeHours,
+  Instances,
+  RuntimeHours,
   LastUpdated,
 }

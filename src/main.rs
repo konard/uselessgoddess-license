@@ -172,5 +172,6 @@ async fn main() {
 
   let listener =
     tokio::net::TcpListener::bind(addr).await.expect("Failed to bind");
+  let app = app.into_make_service_with_connect_info::<SocketAddr>();
   axum::serve(listener, app).await.expect("Server error");
 }

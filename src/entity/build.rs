@@ -5,13 +5,13 @@ use serde::{Deserialize, Serialize};
 #[sea_orm(table_name = "builds")]
 pub struct Model {
   #[sea_orm(primary_key)]
-  pub id: u64,
+  pub id: i64,
   pub version: String,
   pub file_path: String,
   pub changelog: Option<String>,
   pub is_active: bool,
   pub created_at: DateTime,
-  pub downloads: u64,
+  pub downloads: i64,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

@@ -26,7 +26,7 @@ impl MigrationTrait for Migration {
           )
           .col(ColumnDef::new(Builds::CreatedAt).date_time().not_null())
           .col(
-            ColumnDef::new(Builds::DownloadCount)
+            ColumnDef::new(Builds::Downloads)
               .integer()
               .not_null()
               .default(0),
@@ -50,5 +50,5 @@ pub enum Builds {
   Changelog,
   IsActive,
   CreatedAt,
-  DownloadCount,
+  Downloads,
 }
