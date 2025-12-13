@@ -120,11 +120,13 @@ impl<'a> License<'a> {
     now >= start && now <= end
   }
 
+  #[allow(dead_code)]
   pub async fn count(&self) -> Result<u64> {
     let count = license::Entity::find().count(self.db).await?;
     Ok(count)
   }
 
+  #[allow(dead_code)]
   pub async fn count_active(&self) -> Result<u64> {
     let now = Utc::now().naive_utc();
     let count = license::Entity::find()

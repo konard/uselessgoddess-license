@@ -26,10 +26,7 @@ impl MigrationTrait for Migration {
           )
           .col(ColumnDef::new(Builds::CreatedAt).date_time().not_null())
           .col(
-            ColumnDef::new(Builds::Downloads)
-              .integer()
-              .not_null()
-              .default(0),
+            ColumnDef::new(Builds::Downloads).integer().not_null().default(0),
           )
           .to_owned(),
       )

@@ -161,6 +161,7 @@ impl<'a> Stats<'a> {
     Ok(())
   }
 
+  #[allow(dead_code)]
   pub async fn aggregate(&self) -> Result<AggregatedStats> {
     use sea_orm::sea_query::Expr;
 
@@ -192,6 +193,7 @@ impl<'a> Stats<'a> {
   }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct AggregatedStats {
   pub total_xp: u64,

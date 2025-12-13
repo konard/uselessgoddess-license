@@ -28,6 +28,7 @@ impl<'a> User<'a> {
     Ok(user)
   }
 
+  #[allow(dead_code)]
   pub async fn count(&self) -> Result<u64> {
     Ok(user::Entity::find().count(self.db).await?)
   }

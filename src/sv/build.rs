@@ -87,10 +87,12 @@ impl<'a> Build<'a> {
     Ok(builds)
   }
 
+  #[allow(dead_code)]
   pub async fn count(&self) -> Result<u64> {
     Ok(build::Entity::find().count(self.db).await?)
   }
 
+  #[allow(dead_code)]
   pub async fn total_downloads(&self) -> Result<u64> {
     use sea_orm::sea_query::Expr;
 
