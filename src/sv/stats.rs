@@ -5,7 +5,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{entity::*, prelude::*, sv};
 
-/// System stats collected from client for debug analyzing
+/// System stats collected from client for debug analyzing.
+/// These structs are used for deserializing client telemetry data.
+/// Fields are populated during JSON parsing but may not all be directly read.
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 pub struct SystemStats {
@@ -158,4 +160,43 @@ impl<'a> Stats<'a> {
 
     Ok(())
   }
+
+  pub async fn aggregate(&self) -> Result<AggregatedStats> {
+    use sea_orm::sea_query::Expr;
+
+    type StatsRow = (Option<i64>, Option<i64>, Option<i64>, Option<f64>);
+    let result: Option<StatsRow> = stats::Entity::find()
+      .select_only()
+      .column_as(Expr::col(stats::Column::TotalXp).sum(), "total_xp")
+      .column_as(Expr::col(stats::Column::WeeklyXp).sum(), "weekly_xp")
+      .column_as(Expr::col(stats::Column::DropsCount).sum(), "drops")
+      .column_as(Expr::col(stats::Column::RuntimeHours).sum(), "runtime")
+      .into_tuple()
+      .one(self.db)
+      .await?;
+
+    let active_instances: Option<i64> = stats::Entity::find()
+      .select_only()
+      .column_as(Expr::col(stats::Column::Instances).sum(), "instances")
+      .into_tuple()
+      .one(self.db)
+      .await?;
+
+    Ok(AggregatedStats {
+      total_xp: result.and_then(|r| r.0).unwrap_or(0) as u64,
+      weekly_xp: result.and_then(|r| r.1).unwrap_or(0) as u64,
+      total_drops: result.and_then(|r| r.2).unwrap_or(0) as u64,
+      total_runtime_hours: result.and_then(|r| r.3).unwrap_or(0.0),
+      active_instances: active_instances.unwrap_or(0) as u32,
+    })
+  }
+}
+
+#[derive(Debug, Clone)]
+pub struct AggregatedStats {
+  pub total_xp: u64,
+  pub weekly_xp: u64,
+  pub total_drops: u64,
+  pub total_runtime_hours: f64,
+  pub active_instances: u32,
 }

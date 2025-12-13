@@ -274,7 +274,7 @@ async fn handle_admin_command(
 ) -> ResponseResult<()> {
   let sv = app.sv();
 
-  match cmd {
+  let result: std::result::Result<String, String> = match cmd {
     Command::Gen(args) => {
       let parts: Vec<&str> = args.split_whitespace().collect();
       let (target_user, days) = match parts.as_slice() {
@@ -285,106 +285,54 @@ async fn handle_admin_command(
         _ => (None, 0),
       };
 
-      let Some(target_user) = target_user else {
-        bot.reply_html(msg.chat.id, "❌ Usage: /gen <user_id> [days]").await?;
-        return Ok(());
-      };
-
-      let license = sv
-        .license
-        .create(target_user, LicenseType::Pro, days)
-        .await
-        .map_err(|e| format!("❌ Error: {}", e));
-
-      match license {
-        Ok(license) => {
-          bot
-            .reply_html(
-              msg.chat.id,
-              format!("✅ Key created:\n<code>{}</code>", license.key),
-            )
-            .await?;
-        }
-        Err(e) => {
-          bot.reply_html(msg.chat.id, e).await?;
-        }
+      match target_user {
+        Some(target_user) => sv
+          .license
+          .create(target_user, LicenseType::Pro, days)
+          .await
+          .map(|l| format!("✅ Key created:\n<code>{}</code>", l.key))
+          .map_err(|e| e.to_string()),
+        None => Err("Usage: /gen <user_id> [days]".into()),
       }
     }
 
-    Command::Buy { key, days } => {
-      let result = sv
-        .license
-        .extend(&key, days)
-        .await
-        .map_err(|e| format!("❌ Error: {}", e));
-
-      match result {
-        Ok(new_exp) => {
-          let text = format!(
-            "✅ Key extended by {days} days.\nNew expiry: <code>{}</code>",
-            format_date(new_exp)
-          );
-          bot.reply_html(msg.chat.id, text).await?;
-        }
-        Err(e) => {
-          bot.reply_html(msg.chat.id, e).await?;
-        }
-      }
-    }
+    Command::Buy { key, days } => sv
+      .license
+      .extend(&key, days)
+      .await
+      .map(|new_exp| {
+        format!(
+          "✅ Key extended by {days} days.\nNew expiry: <code>{}</code>",
+          format_date(new_exp)
+        )
+      })
+      .map_err(|e| e.to_string()),
 
     Command::Ban(key) => {
-      let result = sv
-        .license
-        .set_blocked(&key, true)
-        .await
-        .map_err(|e| format!("❌ Error: {}", e));
-
-      match result {
-        Ok(_) => {
-          app.drop_sessions(&key);
-          bot
-            .reply_html(msg.chat.id, "🚫 Key blocked, sessions dropped")
-            .await?;
-        }
-        Err(e) => {
-          bot.reply_html(msg.chat.id, e).await?;
-        }
+      let result = sv.license.set_blocked(&key, true).await;
+      if result.is_ok() {
+        app.drop_sessions(&key);
       }
+      result
+        .map(|_| "🚫 Key blocked, sessions dropped".into())
+        .map_err(|e| e.to_string())
     }
 
-    Command::Unban(key) => {
-      let result = sv
-        .license
-        .set_blocked(&key, false)
-        .await
-        .map_err(|e| format!("❌ Error: {}", e));
-
-      match result {
-        Ok(_) => {
-          bot.reply_html(msg.chat.id, "✅ Key unblocked").await?;
-        }
-        Err(e) => {
-          bot.reply_html(msg.chat.id, e).await?;
-        }
-      }
-    }
+    Command::Unban(key) => sv
+      .license
+      .set_blocked(&key, false)
+      .await
+      .map(|_| "✅ Key unblocked".into())
+      .map_err(|e| e.to_string()),
 
     Command::Info(key) => {
       let active = app.sessions.get(&key).map(|s| s.len()).unwrap_or(0);
-
-      let result = sv
-        .license
-        .by_key(&key)
-        .await
-        .map_err(|e| format!("❌ DB Error: {}", e));
-
-      match result {
+      match sv.license.by_key(&key).await {
         Ok(Some(license)) => {
           let status =
             if license.is_blocked { "⛔ BLOCKED" } else { "✅ Active" };
           let username = bot.infer_username(ChatId(license.tg_user_id)).await;
-
-          let text = format!(
+          Ok(format!(
             "🔑 <b>Key Info</b>\n\
             Owner: {username}\n\
             Type: {:?}\n\
@@ -393,57 +341,47 @@ async fn handle_admin_command(
             Active Sessions: {active}",
             license.license_type,
             format_date(license.expires_at),
-          );
-          bot.reply_html(msg.chat.id, text).await?;
+          ))
         }
-        Ok(None) => {
-          bot.reply_html(msg.chat.id, "❌ Key not found").await?;
-        }
-        Err(e) => {
-          bot.reply_html(msg.chat.id, e).await?;
-        }
+        Ok(None) => Err("Key not found".into()),
+        Err(e) => Err(e.to_string()),
       }
     }
 
     Command::Stats => {
       handle_stats_view(&app, &bot, msg.chat.id).await?;
+      return Ok(());
     }
 
     Command::Backup => {
       if app.perform_backup(msg.chat.id).await.is_err() {
         bot.send_document(msg.chat.id, InputFile::file("licenses.db")).await?;
       }
+      return Ok(());
     }
 
-    Command::Builds => {
-      let result = sv.build.all().await.map_err(|e| format!("❌ Error: {}", e));
-
-      match result {
-        Ok(builds) if !builds.is_empty() => {
-          let mut text = String::from("📦 <b>All Builds:</b>\n");
-          for build in builds {
-            let status = if build.is_active { "✅" } else { "❌" };
-            text.push_str(&format!(
-              "\n{} <b>v{}</b>\n📥 {} downloads\n📅 {}\n",
-              status,
-              build.version,
-              build.downloads,
-              format_date(build.created_at)
-            ));
-            if let Some(changelog) = &build.changelog {
-              text.push_str(&format!("📝 {}\n", changelog));
-            }
+    Command::Builds => match sv.build.all().await {
+      Ok(builds) if !builds.is_empty() => {
+        let mut text = String::from("📦 <b>All Builds:</b>\n");
+        for build in builds {
+          let status = if build.is_active { "✅" } else { "❌" };
+          text.push_str(&format!(
+            "\n{} <b>v{}</b>\n📥 {} downloads\n📅 {}\n",
+            status,
+            build.version,
+            build.downloads,
+            format_date(build.created_at)
+          ));
+          if let Some(changelog) = &build.changelog {
+            text.push_str(&format!("📝 {}\n", changelog));
           }
-          bot.reply_with_keyboard(msg.chat.id, text, back_keyboard()).await?;
         }
-        Ok(_) => {
-          bot.reply_html(msg.chat.id, "📦 No builds found.").await?;
-        }
-        Err(e) => {
-          bot.reply_html(msg.chat.id, e).await?;
-        }
+        bot.reply_with_keyboard(msg.chat.id, text, back_keyboard()).await?;
+        return Ok(());
       }
-    }
+      Ok(_) => Err("No builds found".into()),
+      Err(e) => Err(e.to_string()),
+    },
 
     Command::Publish { version, changelog } => {
       let document = msg.reply_to_message().and_then(|reply| reply.document());
@@ -459,7 +397,10 @@ async fn handle_admin_command(
         return Ok(());
       };
 
-      let file = bot.get_file(doc.file.id.clone()).await?;
+      let file = match bot.get_file(doc.file.id.clone()).await {
+        Ok(f) => f,
+        Err(e) => return Err(e),
+      };
       let file_name = doc
         .file_name
         .clone()
@@ -502,82 +443,52 @@ async fn handle_admin_command(
       let changelog_opt =
         if changelog.is_empty() { None } else { Some(changelog) };
 
-      let result = sv
-        .build
+      sv.build
         .create(version.clone(), file_path, changelog_opt)
         .await
-        .map_err(|e| format!("❌ Failed to publish: {}", e));
-
-      match result {
-        Ok(build) => {
-          bot
-            .reply_html(
-              msg.chat.id,
-              format!(
-                "✅ Build published!\n\n\
-                <b>Version:</b> {}\n\
-                <b>File:</b> {}\n\
-                <b>Created:</b> {}",
-                build.version,
-                build.file_path,
-                format_date(build.created_at)
-              ),
-            )
-            .await?;
-        }
-        Err(e) => {
-          bot.reply_html(msg.chat.id, e).await?;
-        }
-      }
+        .map(|build| {
+          format!(
+            "✅ Build published!\n\n\
+            <b>Version:</b> {}\n\
+            <b>File:</b> {}\n\
+            <b>Created:</b> {}",
+            build.version,
+            build.file_path,
+            format_date(build.created_at)
+          )
+        })
+        .map_err(|e| e.to_string())
     }
 
-    Command::Deactivate(version) => {
-      let build = match sv.build.by_version(&version).await {
-        Ok(b) => b,
-        Err(e) => {
-          bot.reply_html(msg.chat.id, format!("❌ Error: {}", e)).await?;
-          return Ok(());
-        }
-      };
+    Command::Deactivate(version) => match sv.build.by_version(&version).await {
+      Ok(Some(build)) if build.is_active => sv
+        .build
+        .deactivate(&version)
+        .await
+        .map(|_| {
+          format!(
+            "✅ Build deactivated.\n\n\
+            <b>Version:</b> {}\n\
+            <b>Downloads:</b> {}",
+            build.version, build.downloads
+          )
+        })
+        .map_err(|e| e.to_string()),
+      Ok(Some(_)) => Err(format!("Build v{} is already inactive", version)),
+      Ok(None) => Err(format!("Build v{} not found", version)),
+      Err(e) => Err(e.to_string()),
+    },
 
-      match build {
-        Some(build) if build.is_active => {
-          if let Err(e) = sv.build.deactivate(&version).await {
-            bot.reply_html(msg.chat.id, format!("❌ Error: {}", e)).await?;
-            return Ok(());
-          }
-          bot
-            .reply_html(
-              msg.chat.id,
-              format!(
-                "✅ Build deactivated.\n\n\
-                <b>Version:</b> {}\n\
-                <b>Downloads:</b> {}",
-                build.version, build.downloads
-              ),
-            )
-            .await?;
-        }
-        Some(_) => {
-          bot
-            .reply_html(
-              msg.chat.id,
-              format!("❌ Build v{} is already inactive.", version),
-            )
-            .await?;
-        }
-        None => {
-          bot
-            .reply_html(
-              msg.chat.id,
-              format!("❌ Build v{} not found.", version),
-            )
-            .await?;
-        }
-      }
+    _ => return Ok(()),
+  };
+
+  match result {
+    Ok(text) => {
+      bot.reply_html(msg.chat.id, text).await?;
     }
-
-    _ => {}
+    Err(e) => {
+      bot.reply_html(msg.chat.id, format!("❌ {}", e)).await?;
+    }
   }
 
   Ok(())
@@ -893,7 +804,9 @@ async fn build_stats_text(app: &AppState) -> String {
   let total_builds = sv.build.count().await.unwrap_or(0);
   let total_downloads = sv.build.total_downloads().await.unwrap_or(0);
 
-  format!(
+  let farming_stats = sv.stats.aggregate().await.ok();
+
+  let mut text = format!(
     "📊 <b>System Stats</b>\n\n\
     <b>🔌 Runtime:</b>\n\
     Active Keys: {}\n\
@@ -913,7 +826,25 @@ async fn build_stats_text(app: &AppState) -> String {
     active_licenses,
     total_builds,
     total_downloads
-  )
+  );
+
+  if let Some(stats) = farming_stats {
+    text.push_str(&format!(
+      "\n\n<b>🌾 Farming (aggregated):</b>\n\
+      Weekly XP: {}\n\
+      Total XP: {}\n\
+      Total Drops: {}\n\
+      Runtime: {:.1}h\n\
+      Active Instances: {}",
+      stats.weekly_xp,
+      stats.total_xp,
+      stats.total_drops,
+      stats.total_runtime_hours,
+      stats.active_instances
+    ));
+  }
+
+  text
 }
 
 async fn handle_stats_view(
