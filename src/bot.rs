@@ -1,12 +1,14 @@
 use std::{path::Path, sync::Arc};
 
 use teloxide::{
+  net::Download,
   prelude::*,
   types::{
     InlineKeyboardButton, InlineKeyboardMarkup, InputFile, MessageId, ParseMode,
   },
-  utils::command::BotCommands,
+  utils::command::{BotCommands, ParseError},
 };
+use tokio::io::AsyncWriteExt;
 
 use crate::{
   entity::license::LicenseType,
@@ -72,6 +74,20 @@ fn back_keyboard() -> InlineKeyboardMarkup {
   )]])
 }
 
+fn parse_publish(
+  input: String,
+) -> std::result::Result<(String, String), ParseError> {
+  let mut parts = input.splitn(2, ' ');
+  let version = parts.next().unwrap_or_default().to_string();
+  let changelog = parts.next().unwrap_or_default().to_string();
+
+  if version.is_empty() {
+    return Err(ParseError::IncorrectFormat("Version is required".into()));
+  }
+
+  Ok((version, changelog))
+}
+
 #[derive(BotCommands, Clone)]
 #[command(rename_rule = "lowercase")]
 enum Command {
@@ -91,6 +107,13 @@ enum Command {
   Info(String),
   Stats,
   Backup,
+  Builds,
+  #[command(parse_with = parse_publish)]
+  Publish {
+    version: String,
+    changelog: String,
+  },
+  Deactivate(String),
 }
 
 trait BotExt {
@@ -186,6 +209,11 @@ fn help_text(is_admin: bool) -> String {
     text.push_str("/info <code>key</code> - Key info\n");
     text.push_str("/stats - Server statistics\n");
     text.push_str("/backup - Force backup\n");
+    text.push_str("\n<b>Build Management:</b>\n");
+    text.push_str("/builds - List all builds\n");
+    text
+      .push_str("/publish <code>version</code> <code>changelog</code> - Publish build (reply to file)\n");
+    text.push_str("/deactivate <code>version</code> - Deactivate build\n");
   }
 
   text
@@ -202,10 +230,9 @@ async fn handle_command(
 
   let sv = app.sv();
 
-  // auto-register user on any command
   let _ = sv.user.get_or_create(user_id).await;
 
-  match cmd {
+  match &cmd {
     Command::Start => {
       let text = "<b>Yet Another Counter Strike Panel!</b>\n\n\
         Use the buttons below to navigate.\n\
@@ -229,11 +256,26 @@ async fn handle_command(
       handle_trial_claim(&sv, &bot, msg.chat.id, user_id).await?;
     }
 
-    // Admin commands
+    _ => {}
+  }
+
+  if is_admin {
+    handle_admin_command(app, bot, msg, cmd).await?;
+  }
+
+  Ok(())
+}
+
+async fn handle_admin_command(
+  app: Arc<AppState>,
+  bot: Bot,
+  msg: Message,
+  cmd: Command,
+) -> ResponseResult<()> {
+  let sv = app.sv();
+
+  let result: std::result::Result<String, String> = match cmd {
     Command::Gen(args) => {
-      if !is_admin {
-        return Ok(());
-      }
       let parts: Vec<&str> = args.split_whitespace().collect();
       let (target_user, days) = match parts.as_slice() {
         [user_id] => (user_id.parse::<i64>().ok(), 0u64),
@@ -243,88 +285,54 @@ async fn handle_command(
         _ => (None, 0),
       };
 
-      let Some(target_user) = target_user else {
-        bot.reply_html(msg.chat.id, "❌ Usage: /gen <user_id> [days]").await?;
-        return Ok(());
-      };
-
-      match sv.license.create(target_user, LicenseType::Pro, days).await {
-        Ok(license) => {
-          bot
-            .reply_html(
-              msg.chat.id,
-              format!("✅ Key created:\n<code>{}</code>", license.key),
-            )
-            .await?;
-        }
-        Err(e) => {
-          bot.reply_html(msg.chat.id, format!("❌ Error: {}", e)).await?;
-        }
+      match target_user {
+        Some(target_user) => sv
+          .license
+          .create(target_user, LicenseType::Pro, days)
+          .await
+          .map(|l| format!("✅ Key created:\n<code>{}</code>", l.key))
+          .map_err(|e| e.to_string()),
+        None => Err("Usage: /gen <user_id> [days]".into()),
       }
     }
 
-    Command::Buy { key, days } => {
-      if !is_admin {
-        return Ok(());
-      }
-      match sv.license.extend(&key, days).await {
-        Ok(new_exp) => {
-          let text = format!(
-            "✅ Key extended by {days} days.\nNew expiry: <code>{}</code>",
-            format_date(new_exp)
-          );
-          bot.reply_html(msg.chat.id, text).await?;
-        }
-        Err(e) => {
-          bot.reply_html(msg.chat.id, format!("❌ Error: {}", e)).await?;
-        }
-      }
-    }
+    Command::Buy { key, days } => sv
+      .license
+      .extend(&key, days)
+      .await
+      .map(|new_exp| {
+        format!(
+          "✅ Key extended by {days} days.\nNew expiry: <code>{}</code>",
+          format_date(new_exp)
+        )
+      })
+      .map_err(|e| e.to_string()),
 
     Command::Ban(key) => {
-      if !is_admin {
-        return Ok(());
+      let result = sv.license.set_blocked(&key, true).await;
+      if result.is_ok() {
+        app.drop_sessions(&key);
       }
-      match sv.license.set_blocked(&key, true).await {
-        Ok(_) => {
-          app.drop_sessions(&key);
-          bot
-            .reply_html(msg.chat.id, "🚫 Key blocked, sessions dropped")
-            .await?;
-        }
-        Err(e) => {
-          bot.reply_html(msg.chat.id, format!("❌ Error: {}", e)).await?;
-        }
-      }
+      result
+        .map(|_| "🚫 Key blocked, sessions dropped".into())
+        .map_err(|e| e.to_string())
     }
 
-    Command::Unban(key) => {
-      if !is_admin {
-        return Ok(());
-      }
-      match sv.license.set_blocked(&key, false).await {
-        Ok(_) => {
-          bot.reply_html(msg.chat.id, "✅ Key unblocked").await?;
-        }
-        Err(e) => {
-          bot.reply_html(msg.chat.id, format!("❌ Error: {}", e)).await?;
-        }
-      }
-    }
+    Command::Unban(key) => sv
+      .license
+      .set_blocked(&key, false)
+      .await
+      .map(|_| "✅ Key unblocked".into())
+      .map_err(|e| e.to_string()),
 
     Command::Info(key) => {
-      if !is_admin {
-        return Ok(());
-      }
       let active = app.sessions.get(&key).map(|s| s.len()).unwrap_or(0);
-
       match sv.license.by_key(&key).await {
         Ok(Some(license)) => {
           let status =
             if license.is_blocked { "⛔ BLOCKED" } else { "✅ Active" };
           let username = bot.infer_username(ChatId(license.tg_user_id)).await;
-
-          let text = format!(
+          Ok(format!(
             "🔑 <b>Key Info</b>\n\
             Owner: {username}\n\
             Type: {:?}\n\
@@ -333,32 +341,153 @@ async fn handle_command(
             Active Sessions: {active}",
             license.license_type,
             format_date(license.expires_at),
-          );
-          bot.reply_html(msg.chat.id, text).await?;
+          ))
         }
-        Ok(None) => {
-          bot.reply_html(msg.chat.id, "❌ Key not found").await?;
-        }
-        Err(e) => {
-          bot.reply_html(msg.chat.id, format!("❌ DB Error: {}", e)).await?;
-        }
+        Ok(None) => Err("Key not found".into()),
+        Err(e) => Err(e.to_string()),
       }
     }
 
     Command::Stats => {
-      if !is_admin {
-        return Ok(());
-      }
       handle_stats_view(&app, &bot, msg.chat.id).await?;
+      return Ok(());
     }
 
     Command::Backup => {
-      if !is_admin {
-        return Ok(());
-      }
       if app.perform_backup(msg.chat.id).await.is_err() {
         bot.send_document(msg.chat.id, InputFile::file("licenses.db")).await?;
       }
+      return Ok(());
+    }
+
+    Command::Builds => match sv.build.all().await {
+      Ok(builds) if !builds.is_empty() => {
+        let mut text = String::from("📦 <b>All Builds:</b>\n");
+        for build in builds {
+          let status = if build.is_active { "✅" } else { "❌" };
+          text.push_str(&format!(
+            "\n{} <b>v{}</b>\n📥 {} downloads\n📅 {}\n",
+            status,
+            build.version,
+            build.downloads,
+            format_date(build.created_at)
+          ));
+          if let Some(changelog) = &build.changelog {
+            text.push_str(&format!("📝 {}\n", changelog));
+          }
+        }
+        bot.reply_with_keyboard(msg.chat.id, text, back_keyboard()).await?;
+        return Ok(());
+      }
+      Ok(_) => Err("No builds found".into()),
+      Err(e) => Err(e.to_string()),
+    },
+
+    Command::Publish { version, changelog } => {
+      let document = msg.reply_to_message().and_then(|reply| reply.document());
+
+      let Some(doc) = document else {
+        bot
+          .reply_html(
+            msg.chat.id,
+            "❌ Please reply to a file with this command.\n\
+            Example: Reply to a .exe file with /publish 1.0.0 Initial release",
+          )
+          .await?;
+        return Ok(());
+      };
+
+      let file = match bot.get_file(doc.file.id.clone()).await {
+        Ok(f) => f,
+        Err(e) => return Err(e),
+      };
+      let file_name = doc
+        .file_name
+        .clone()
+        .unwrap_or_else(|| format!("build_{}.bin", version));
+      let file_path = format!("{}/{}", app.config.builds_directory, file_name);
+
+      if let Err(e) =
+        tokio::fs::create_dir_all(&app.config.builds_directory).await
+      {
+        bot
+          .reply_html(
+            msg.chat.id,
+            format!("❌ Failed to create builds directory: {}", e),
+          )
+          .await?;
+        return Ok(());
+      }
+
+      let download_result = async {
+        let mut stream = bot.download_file_stream(&file.path);
+        let mut dst = tokio::fs::File::create(&file_path).await?;
+
+        use futures::StreamExt;
+        while let Some(chunk) = stream.next().await {
+          let chunk = chunk?;
+          dst.write_all(&chunk).await?;
+        }
+        dst.flush().await?;
+        Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+      }
+      .await;
+
+      if let Err(e) = download_result {
+        bot
+          .reply_html(msg.chat.id, format!("❌ Failed to download file: {}", e))
+          .await?;
+        return Ok(());
+      }
+
+      let changelog_opt =
+        if changelog.is_empty() { None } else { Some(changelog) };
+
+      sv.build
+        .create(version.clone(), file_path, changelog_opt)
+        .await
+        .map(|build| {
+          format!(
+            "✅ Build published!\n\n\
+            <b>Version:</b> {}\n\
+            <b>File:</b> {}\n\
+            <b>Created:</b> {}",
+            build.version,
+            build.file_path,
+            format_date(build.created_at)
+          )
+        })
+        .map_err(|e| e.to_string())
+    }
+
+    Command::Deactivate(version) => match sv.build.by_version(&version).await {
+      Ok(Some(build)) if build.is_active => sv
+        .build
+        .deactivate(&version)
+        .await
+        .map(|_| {
+          format!(
+            "✅ Build deactivated.\n\n\
+            <b>Version:</b> {}\n\
+            <b>Downloads:</b> {}",
+            build.version, build.downloads
+          )
+        })
+        .map_err(|e| e.to_string()),
+      Ok(Some(_)) => Err(format!("Build v{} is already inactive", version)),
+      Ok(None) => Err(format!("Build v{} not found", version)),
+      Err(e) => Err(e.to_string()),
+    },
+
+    _ => return Ok(()),
+  };
+
+  match result {
+    Ok(text) => {
+      bot.reply_html(msg.chat.id, text).await?;
+    }
+    Err(e) => {
+      bot.reply_html(msg.chat.id, format!("❌ {}", e)).await?;
     }
   }
 
@@ -427,7 +556,10 @@ async fn handle_callback(
       if !is_admin {
         return Ok(());
       }
-      handle_stats_edit(&app, &bot, chat_id, message_id).await?;
+      let text = build_stats_text(&app).await;
+      bot
+        .edit_with_keyboard(chat_id, message_id, text, admin_keyboard())
+        .await?;
     }
     CB_BACKUP => {
       if !is_admin {
@@ -659,44 +791,69 @@ async fn handle_download(
   Ok(())
 }
 
+async fn build_stats_text(app: &AppState) -> String {
+  let sv = app.sv();
+
+  let active_keys = app.sessions.len();
+  let total_sessions: usize =
+    app.sessions.iter().map(|e| e.value().len()).sum();
+
+  let total_users = sv.user.count().await.unwrap_or(0);
+  let total_licenses = sv.license.count().await.unwrap_or(0);
+  let active_licenses = sv.license.count_active().await.unwrap_or(0);
+  let total_builds = sv.build.count().await.unwrap_or(0);
+  let total_downloads = sv.build.total_downloads().await.unwrap_or(0);
+
+  let farming_stats = sv.stats.aggregate().await.ok();
+
+  let mut text = format!(
+    "📊 <b>System Stats</b>\n\n\
+    <b>🔌 Runtime:</b>\n\
+    Active Keys: {}\n\
+    Total Sessions: {}\n\n\
+    <b>👥 Users:</b>\n\
+    Total Registered: {}\n\n\
+    <b>🔑 Licenses:</b>\n\
+    Total: {}\n\
+    Active: {}\n\n\
+    <b>📦 Builds:</b>\n\
+    Total: {}\n\
+    Downloads: {}",
+    active_keys,
+    total_sessions,
+    total_users,
+    total_licenses,
+    active_licenses,
+    total_builds,
+    total_downloads
+  );
+
+  if let Some(stats) = farming_stats {
+    text.push_str(&format!(
+      "\n\n<b>🌾 Farming (aggregated):</b>\n\
+      Weekly XP: {}\n\
+      Total XP: {}\n\
+      Total Drops: {}\n\
+      Runtime: {:.1}h\n\
+      Active Instances: {}",
+      stats.weekly_xp,
+      stats.total_xp,
+      stats.total_drops,
+      stats.total_runtime_hours,
+      stats.active_instances
+    ));
+  }
+
+  text
+}
+
 async fn handle_stats_view(
   app: &AppState,
   bot: &Bot,
   chat_id: ChatId,
 ) -> ResponseResult<()> {
-  let active_keys = app.sessions.len();
-  let total_sessions: usize =
-    app.sessions.iter().map(|e| e.value().len()).sum();
-
-  let text = format!(
-    "📊 <b>System Stats</b>\n\n\
-    <b>Active Keys:</b> {}\n\
-    <b>Total Sessions:</b> {}",
-    active_keys, total_sessions
-  );
-
+  let text = build_stats_text(app).await;
   bot.reply_with_keyboard(chat_id, text, back_keyboard()).await?;
-  Ok(())
-}
-
-async fn handle_stats_edit(
-  app: &AppState,
-  bot: &Bot,
-  chat_id: ChatId,
-  message_id: MessageId,
-) -> ResponseResult<()> {
-  let active_keys = app.sessions.len();
-  let total_sessions: usize =
-    app.sessions.iter().map(|e| e.value().len()).sum();
-
-  let text = format!(
-    "📊 <b>System Stats</b>\n\n\
-    <b>Active Keys:</b> {}\n\
-    <b>Total Sessions:</b> {}",
-    active_keys, total_sessions
-  );
-
-  bot.edit_with_keyboard(chat_id, message_id, text, admin_keyboard()).await?;
   Ok(())
 }
 
