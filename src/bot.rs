@@ -236,6 +236,7 @@ async fn handle_command(
     Command::Start => {
       let text = "<b>Yet Another Counter Strike Panel!</b>\n\n\
         Use the buttons below to navigate.\n\
+        Read docs: https://yacsp.gitbook.io/yacsp\n\
         Contact support: @y_a_c_s_p";
       bot
         .reply_with_keyboard(
