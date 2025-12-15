@@ -10,7 +10,9 @@ use teloxide::{
 };
 
 use crate::{
-  entity::license::LicenseType, prelude::*, state::AppState, state::Services,
+  entity::license::LicenseType,
+  prelude::*,
+  state::{AppState, Services},
 };
 
 fn format_date(date: DateTime) -> String {
@@ -78,6 +80,7 @@ fn parse_publish(
 enum Command {
   Start,
   // Admin commands only below - users use button interface
+  Help,
   Users,
   Gen(String),
   #[command(parse_with = "split")]
@@ -183,8 +186,6 @@ async fn handle_command(
   cmd: Command,
 ) -> ResponseResult<()> {
   let user_id = msg.chat.id.0;
-  let is_admin = app.admins.contains(&user_id);
-
   let sv = app.sv();
 
   let _ = sv.user.get_or_create(user_id).await;
@@ -203,7 +204,7 @@ async fn handle_command(
       .await?;
   }
 
-  if is_admin {
+  if app.admins.contains(&user_id) {
     handle_admin_command(app, bot, msg, cmd).await?;
   }
 
@@ -402,6 +403,13 @@ async fn handle_admin_command(
       }
       .await
     }
+
+    Command::Stats => Ok(format!(
+      "Active Keys: {}\n\
+       Active Sessions: {}",
+      app.sessions.iter().map(|kv| kv.value().len()).count(),
+      app.sessions.len()
+    )),
 
     _ => return Ok(()),
   };
