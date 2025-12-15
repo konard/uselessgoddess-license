@@ -407,7 +407,7 @@ async fn handle_admin_command(
     Command::Stats => Ok(format!(
       "Active Keys: {}\n\
        Active Sessions: {}",
-      app.sessions.iter().map(|kv| kv.value().len()).count(),
+      app.sessions.iter().map(|kv| kv.value().len()).sum::<usize>(),
       app.sessions.len()
     )),
 
