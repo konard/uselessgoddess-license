@@ -31,12 +31,8 @@ const CB_LICENSE: &str = "license";
 const CB_TRIAL: &str = "trial";
 const CB_DOWNLOAD: &str = "download";
 const CB_BACK: &str = "back";
-const CB_ADMIN: &str = "admin";
-const CB_STATS: &str = "stats";
-const CB_BACKUP: &str = "backup";
-const CB_ADMIN_HELP: &str = "admin_help";
 
-fn main_menu(is_promo: bool, is_admin: bool) -> InlineKeyboardMarkup {
+fn main_menu(is_promo: bool) -> InlineKeyboardMarkup {
   let mut rows = vec![
     vec![InlineKeyboardButton::callback("👤 My Profile", CB_PROFILE)],
     vec![InlineKeyboardButton::callback("🔑 My License", CB_LICENSE)],
@@ -50,33 +46,13 @@ fn main_menu(is_promo: bool, is_admin: bool) -> InlineKeyboardMarkup {
     )]);
   }
 
-  if is_admin {
-    rows.push(vec![InlineKeyboardButton::callback("🔧 Admin Panel", CB_ADMIN)]);
-  }
-
   InlineKeyboardMarkup::new(rows)
-}
-
-fn admin_keyboard() -> InlineKeyboardMarkup {
-  InlineKeyboardMarkup::new(vec![
-    vec![InlineKeyboardButton::callback("📊 Server Stats", CB_STATS)],
-    vec![InlineKeyboardButton::callback("📦 Backup DB", CB_BACKUP)],
-    vec![InlineKeyboardButton::callback("❓ Commands Help", CB_ADMIN_HELP)],
-    vec![InlineKeyboardButton::callback("« Back to Menu", CB_BACK)],
-  ])
 }
 
 fn back_keyboard() -> InlineKeyboardMarkup {
   InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
     "« Back to Menu",
     CB_BACK,
-  )]])
-}
-
-fn back_to_admin_keyboard() -> InlineKeyboardMarkup {
-  InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
-    "« Back to Admin",
-    CB_ADMIN,
   )]])
 }
 
@@ -200,26 +176,6 @@ impl BotExt for Bot {
   }
 }
 
-fn admin_help_text() -> String {
-  let mut text = String::from("<b>🔧 Admin Commands</b>\n\n");
-  text.push_str("<b>User Management:</b>\n");
-  text.push_str("/users - List all users\n");
-  text.push_str("/gen <code>user_id</code> [days] - Generate key\n");
-  text.push_str("/buy <code>key</code> <code>days</code> - Extend key\n");
-  text.push_str("/ban <code>key</code> - Block key\n");
-  text.push_str("/unban <code>key</code> - Unblock key\n");
-  text.push_str("/info <code>key</code> - Key info\n");
-  text.push_str("/stats - Server statistics\n");
-  text.push_str("/backup - Force backup\n");
-  text.push_str("\n<b>Build Management:</b>\n");
-  text.push_str("/builds - List all builds\n");
-  text.push_str(
-    "/publish <code>filename</code> <code>version</code> [changelog] - Publish build from builds folder\n",
-  );
-  text.push_str("/deactivate <code>version</code> - Deactivate build\n");
-  text
-}
-
 async fn handle_command(
   app: Arc<AppState>,
   bot: Bot,
@@ -242,7 +198,7 @@ async fn handle_command(
       .reply_with_keyboard(
         msg.chat.id,
         text,
-        main_menu(sv.license.is_promo_active(), is_admin),
+        main_menu(sv.license.is_promo_active()),
       )
       .await?;
   }
@@ -351,26 +307,25 @@ async fn handle_admin_command(
       .map(|_| "✅ Key unblocked".into()),
 
     Command::Info(key) => {
-      let active = app.sessions.get(&key).map(|s| s.len()).unwrap_or(0);
-      match sv.license.by_key(&key).await {
-        Ok(Some(license)) => {
-          let status =
-            if license.is_blocked { "⛔ BLOCKED" } else { "✅ Active" };
-          let username = bot.infer_username(ChatId(license.tg_user_id)).await;
-          Ok(format!(
-            "🔑 <b>Key Info</b>\n\
-            Owner: {username}\n\
-            Type: {:?}\n\
-            Expires: {}\n\
-            Status: {status}\n\
-            Active Sessions: {active}",
-            license.license_type,
-            format_date(license.expires_at),
-          ))
-        }
-        Ok(None) => Err(Error::LicenseNotFound),
-        Err(e) => Err(e),
+      async {
+        let active = app.sessions.get(&key).map(|s| s.len()).unwrap_or(0);
+        let license =
+          sv.license.by_key(&key).await?.ok_or(Error::LicenseNotFound)?;
+        let status =
+          if license.is_blocked { "⛔ BLOCKED" } else { "✅ Active" };
+        let username = bot.infer_username(ChatId(license.tg_user_id)).await;
+        Ok(format!(
+          "🔑 <b>Key Info</b>\n\
+        Owner: {username}\n\
+        Type: {:?}\n\
+        Expires: {}\n\
+        Status: {status}\n\
+        Active Sessions: {active}",
+          license.license_type,
+          format_date(license.expires_at),
+        ))
       }
+      .await
     }
     Command::Backup => {
       if app.perform_backup(msg.chat.id).await.is_err() {
@@ -430,21 +385,23 @@ async fn handle_admin_command(
       }
     }
 
-    Command::Deactivate(version) => match sv.build.by_version(&version).await {
-      Ok(Some(build)) if build.is_active => {
-        sv.build.deactivate(&version).await.map(|_| {
-          format!(
-            "✅ Build deactivated.\n\n\
-            <b>Version:</b> {}\n\
-            <b>Downloads:</b> {}",
-            build.version, build.downloads
-          )
-        })
+    Command::Deactivate(version) => {
+      async {
+        let build =
+          sv.build.by_version(&version).await?.ok_or(Error::BuildNotFound)?;
+        if !build.is_active {
+          return Err(Error::BuildInactive);
+        }
+        sv.build.deactivate(&version).await?;
+        Ok(format!(
+          "✅ Build deactivated.\n\n\
+        <b>Version:</b> {}\n\
+        <b>Downloads:</b> {}",
+          build.version, build.downloads
+        ))
       }
-      Ok(Some(_)) => Err(Error::BuildInactive),
-      Ok(None) => Err(Error::BuildNotFound),
-      Err(e) => Err(e),
-    },
+      .await
+    }
 
     _ => return Ok(()),
   };
@@ -479,7 +436,6 @@ async fn handle_callback(
   let chat_id = msg.chat().id;
   let message_id = msg.id();
   let user_id = query.from.id.0 as i64;
-  let is_admin = app.admins.contains(&user_id);
 
   // answer callback to remove loading state
   bot.answer_callback_query(query.id.clone()).await?;
@@ -520,54 +476,7 @@ async fn handle_callback(
           chat_id,
           message_id,
           text,
-          main_menu(sv.license.is_promo_active(), is_admin),
-        )
-        .await?;
-    }
-    CB_ADMIN => {
-      if !is_admin {
-        return Ok(());
-      }
-      let text = "🔧 <b>Admin Panel</b>\n\nSelect an action:";
-      bot
-        .edit_with_keyboard(chat_id, message_id, text, admin_keyboard())
-        .await?;
-    }
-    CB_STATS => {
-      let active_keys = app.sessions.len();
-      let total_sessions: usize =
-        app.sessions.iter().map(|e| e.value().len()).sum();
-
-      let message = format!(
-        "📊 <b>System Stats</b>\nActive Keys: {}\nTotal Windows: {}",
-        active_keys, total_sessions
-      );
-      bot.reply_html(chat_id, message).await?;
-    }
-    CB_BACKUP => {
-      if !is_admin {
-        return Ok(());
-      }
-      let _ = app.perform_backup(chat_id).await;
-      bot
-        .edit_with_keyboard(
-          chat_id,
-          message_id,
-          "📦 Backup sent!",
-          admin_keyboard(),
-        )
-        .await?;
-    }
-    CB_ADMIN_HELP => {
-      if !is_admin {
-        return Ok(());
-      }
-      bot
-        .edit_with_keyboard(
-          chat_id,
-          message_id,
-          admin_help_text(),
-          back_to_admin_keyboard(),
+          main_menu(sv.license.is_promo_active()),
         )
         .await?;
     }
