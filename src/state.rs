@@ -5,8 +5,6 @@ use std::{
   sync::atomic::{AtomicU64, Ordering},
 };
 
-use uuid::Uuid;
-
 use teloxide::{
   Bot,
   prelude::*,
@@ -14,6 +12,7 @@ use teloxide::{
 };
 use tokio::fs;
 use tracing::{debug, info};
+use uuid::Uuid;
 
 use crate::{migration::Migrator, prelude::*, sv};
 
