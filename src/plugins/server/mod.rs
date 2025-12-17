@@ -29,14 +29,7 @@ impl super::Plugin for Plugin {
         .context("Failed to build rate limiter config")?,
     );
 
-    let governor_limiter = governor_conf.limiter().clone();
-
-    tokio::spawn(async move {
-      loop {
-        tokio::time::sleep(Duration::from_secs(60)).await;
-        governor_limiter.retain_recent();
-      }
-    });
+    let limiter = governor_conf.limiter().clone();
 
     let router = Router::new()
       .route("/health", get(handlers::health))
@@ -61,13 +54,32 @@ impl super::Plugin for Plugin {
       std::env::var("PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(3000);
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
 
+    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     tracing::info!("HTTP Server listening on {addr}");
 
-    tokio::spawn(async move {
-      let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-      axum::serve(listener, router).await.unwrap();
-    });
+    let limiter = async {
+      loop {
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        limiter.retain_recent();
+      }
+    };
 
-    Ok(())
+    let server = async {
+      axum::serve(listener, router).await.context("Axum server error")
+    };
+
+    tokio::select! {
+      result = server => {
+        match &result {
+            Ok(_) => info!("Server stopped gracefully"),
+            Err(err) => error!("Server stopped with error: {err}"),
+        }
+        result
+      }
+      _ = limiter => {
+        error!("Rate limiter cleaner stopped unexpectedly!");
+        Ok(())
+      }
+    }
   }
 }

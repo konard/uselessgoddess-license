@@ -21,10 +21,7 @@ pub struct Plugin;
 #[async_trait::async_trait]
 impl super::Plugin for Plugin {
   async fn start(&self, app: Arc<AppState>) -> anyhow::Result<()> {
-    tokio::spawn(async move {
-      run_bot(app).await;
-    });
-
+    run_bot(app).await;
     Ok(())
   }
 }
@@ -40,7 +37,7 @@ pub async fn run_bot(app: Arc<AppState>) {
       move |bot: Bot, msg: Message, cmd: Command| {
         let app = app.clone();
         let bot = ReplyBot::new(bot, msg.chat.id.0, msg.chat.id, msg.id);
-        command::handle(app, bot, msg, cmd)
+        command::handle(app, bot, cmd)
       }
     }))
     .branch(Update::filter_callback_query().endpoint({

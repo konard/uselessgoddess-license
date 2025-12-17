@@ -64,7 +64,6 @@ pub enum Command {
 pub async fn handle(
   app: Arc<AppState>,
   bot: ReplyBot,
-  msg: Message,
   cmd: Command,
 ) -> ResponseResult<()> {
   let sv = app.sv();
@@ -83,9 +82,9 @@ pub async fn handle(
       )
       .await?;
   }
-  
+
   if app.admins.contains(&bot.user_id) {
-    handle_admin_command(app, bot, msg, cmd).await?;
+    handle_admin_command(app, bot, cmd).await?;
   }
 
   Ok(())
@@ -94,7 +93,6 @@ pub async fn handle(
 async fn handle_admin_command(
   app: Arc<AppState>,
   bot: ReplyBot,
-  msg: Message,
   cmd: Command,
 ) -> ResponseResult<()> {
   let sv = app.sv();
