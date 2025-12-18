@@ -7,6 +7,7 @@ pub use chrono::{
 };
 pub use dashmap::DashMap;
 pub use migration::MigratorTrait;
+#[allow(unused_imports)]
 pub use sea_orm::{
   ActiveModelTrait, ColumnTrait, ConnectionTrait, Database, DatabaseConnection,
   EntityTrait, NotSet, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,

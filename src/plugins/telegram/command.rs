@@ -297,7 +297,7 @@ async fn handle_admin_command(
         ));
       }
 
-      text.push_str("\n");
+      text.push('\n');
 
       if text.len() > 3800 {
         text.push_str("<i>...list truncated (too long)...</i>");
