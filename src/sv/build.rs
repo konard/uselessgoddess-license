@@ -38,7 +38,7 @@ impl<'a> Build<'a> {
     let now = Utc::now().naive_utc();
 
     let build = build::ActiveModel {
-      id: Set(Default::default()),
+      id: NotSet,
       version: Set(version),
       file_path: Set(file_path),
       changelog: Set(changelog),
