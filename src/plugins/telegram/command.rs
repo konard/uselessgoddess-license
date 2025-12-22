@@ -255,54 +255,55 @@ async fn handle_admin_command(
     let now = Utc::now().naive_utc();
 
     for (i, (user, username, licenses)) in resolved_users.iter().enumerate() {
-      text.push_str(&format!(
-        "<b>{}. {}</b> <code>{}</code>\n",
+      let status_icon = if licenses.is_empty() {
+        "📂"
+      } else {
+        let mut has_online = false;
+        let mut has_valid = false;
+        let mut has_blocked = false;
+
+        for lic in licenses {
+          if lic.is_blocked {
+            has_blocked = true;
+            continue;
+          }
+
+          if lic.expires_at > now {
+            has_valid = true;
+            if let Some(sessions) = app.sessions.get(&lic.key) {
+              if !sessions.is_empty() {
+                has_online = true;
+                break; 
+              }
+            }
+          }
+        }
+
+        if has_online {
+          "🟢"
+        } else if has_valid {
+          "⚪"
+        } else if has_blocked {
+          "⛔"
+        } else {
+          "❌"
+        }
+      };
+
+      let line = format!(
+        "<b>{}.</b> {} {} <code>{}</code>\n",
         i + 1,
+        status_icon,
         username,
         user.tg_user_id
-      ));
+      );
 
-      if licenses.is_empty() {
-        text.push_str("   └─ <i>No licenses</i>\n");
-      }
-
-      for (j, lic) in licenses.iter().enumerate() {
-        let is_last = j == licenses.len() - 1;
-        let branch = if is_last { "└─" } else { "├─" };
-
-        let (icon, status_text) = if lic.is_blocked {
-          ("⛔", "BLOCKED".to_string())
-        } else if lic.expires_at < now {
-          ("❌", "Expired".to_string())
-        } else {
-          match app.sessions.get(&lic.key) {
-            Some(sessions) if !sessions.is_empty() => {
-              ("🟢", format!("Online ({})", sessions.len()))
-            }
-            _ => ("⚪", "Offline".to_string()),
-          }
-        };
-
-        let short_key =
-          if lic.key.len() > 8 { &lic.key[..8] } else { &lic.key };
-
-        text.push_str(&format!(
-          "   {} {} <b>{:?}</b> [{}]\n   │  <code>{}...</code> | {}\n",
-          branch,
-          icon,
-          lic.license_type,
-          status_text,
-          short_key,
-          utils::format_date(lic.expires_at)
-        ));
-      }
-
-      text.push('\n');
-
-      if text.len() > 3800 {
-        text.push_str("<i>...list truncated (too long)...</i>");
+      if text.len() + line.len() > 4000 {
+        text.push_str("\n<i>...list truncated (too many users)...</i>");
         break;
       }
+
+      text.push_str(&line);
     }
 
     bot.reply_html(text).await?;
