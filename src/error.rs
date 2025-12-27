@@ -26,7 +26,7 @@ pub enum Error {
   Promo(Promo),
   #[error("Build not found")]
   BuildNotFound,
-  #[error("Build already inactive")]
+  #[error("Build already yanked")]
   BuildInactive,
   #[error("Invalid arguments: {0}")]
   InvalidArgs(String),
@@ -51,7 +51,7 @@ impl Error {
         "You have already claimed this promo".into()
       }
       Error::BuildNotFound => "Build not found".into(),
-      Error::BuildInactive => "Build is already inactive".into(),
+      Error::BuildInactive => "Build is already yanked".into(),
       Error::InvalidArgs(msg) => msg.clone(),
       Error::Database(e) => format!("Database error: {}", e),
       Error::Io(e) => format!("IO error: {}", e),
@@ -81,9 +81,7 @@ impl IntoResponse for Error {
         (StatusCode::CONFLICT, "Promo already claimed")
       }
       Error::BuildNotFound => (StatusCode::NOT_FOUND, "Build not found"),
-      Error::BuildInactive => {
-        (StatusCode::BAD_REQUEST, "Build already inactive")
-      }
+      Error::BuildInactive => (StatusCode::BAD_REQUEST, "Build already yanked"),
       Error::InvalidArgs(msg) => (StatusCode::BAD_REQUEST, msg.as_str()),
       Error::Io(_) => (StatusCode::INTERNAL_SERVER_ERROR, "IO error"),
       Error::Internal(_) => {
