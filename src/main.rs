@@ -94,7 +94,7 @@ async fn main() {
 
   // Validate environment variables before proceeding
   if let Err(msg) = validate_env() {
-    eprintln!("❌ Configuration error:\n\n{}", msg);
+    eprintln!("Configuration error:\n\n{}", msg);
     std::process::exit(1);
   }
 
