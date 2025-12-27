@@ -35,8 +35,8 @@ fn parse_publish(
 #[command(rename_rule = "lowercase")]
 pub enum Command {
   Start,
-  Help,
   // Admin commands below - users use button interface
+  Help,
   Users,
   Gen(String),
   #[command(parse_with = "split")]
