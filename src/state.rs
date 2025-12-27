@@ -1,6 +1,6 @@
 use std::{
-  collections::{HashSet, hash_map::DefaultHasher},
-  hash::{Hash, Hasher},
+  collections::HashSet,
+  hash::{DefaultHasher, Hash, Hasher},
   path::Path,
   sync::atomic::{AtomicU64, Ordering},
 };
@@ -15,7 +15,7 @@ use tokio::fs;
 use tracing::{debug, info};
 use uuid::Uuid;
 
-use crate::{prelude::*, sv};
+use crate::{entity::license, prelude::*, sv};
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -77,9 +77,15 @@ pub struct AppState {
   backup_hash: AtomicU64,
 }
 
-fn hash_of(bytes: &[u8]) -> u64 {
+fn hash_licenses(licenses: &[license::Model]) -> u64 {
   let mut hasher = DefaultHasher::new();
-  bytes.hash(&mut hasher);
+  for lic in licenses {
+    lic.key.hash(&mut hasher);
+    lic.tg_user_id.hash(&mut hasher);
+    lic.is_blocked.hash(&mut hasher);
+    lic.expires_at.and_utc().timestamp().hash(&mut hasher);
+    lic.max_sessions.hash(&mut hasher);
+  }
   hasher.finish()
 }
 
@@ -131,7 +137,26 @@ impl AppState {
     }
   }
 
+  /// Perform backup only when license data changes.
+  /// Changes in metrics/stats tables are not a reason to backup.
   pub async fn perform_smart_backup(&self) -> anyhow::Result<()> {
+    // Hash only license data - stats/metrics changes don't trigger backups
+    let licenses = license::Entity::find()
+      .order_by_asc(license::Column::Key)
+      .all(&self.db)
+      .await?;
+
+    let new_hash = hash_licenses(&licenses);
+    let old_hash = self.backup_hash.load(Ordering::Relaxed);
+
+    self.backup_hash.store(new_hash, Ordering::Relaxed);
+
+    // Skip backup if no license changes (or first run)
+    if new_hash == old_hash || old_hash == 0 {
+      debug!("No license changes, skipping backup");
+      return Ok(());
+    }
+
     let timestamp = Utc::now().format("%Y-%m-%d_%H-%M-%S");
     let filename = format!("backup_{}.db", timestamp);
     let path = Path::new(&filename);
@@ -149,30 +174,19 @@ impl AppState {
       ))
       .await?;
 
-    let content = fs::read(path).await?;
+    for &admin in self.admins.iter() {
+      let doc = InputFile::file(path);
+      let caption = format!(
+        "📦 <b>Database Backup</b>\nLicense changes detected.\nTime: {}",
+        timestamp
+      );
 
-    let new_hash = hash_of(&content);
-    let old_hash = self.backup_hash.load(Ordering::Relaxed);
-
-    self.backup_hash.store(new_hash, Ordering::Relaxed);
-
-    if new_hash == old_hash || old_hash == 0 {
-      debug!("No changes in DB, skipping backup notification");
-    } else {
-      for &admin in self.admins.iter() {
-        let doc = InputFile::file(path);
-        let caption = format!(
-          "📦 <b>Database Backup</b>\nChanges detected.\nTime: {}",
-          timestamp
-        );
-
-        let _ = self
-          .bot
-          .send_document(ChatId(admin), doc)
-          .caption(caption)
-          .parse_mode(ParseMode::Html)
-          .await;
-      }
+      let _ = self
+        .bot
+        .send_document(ChatId(admin), doc)
+        .caption(caption)
+        .parse_mode(ParseMode::Html)
+        .await;
     }
 
     let _ = fs::remove_file(path).await;

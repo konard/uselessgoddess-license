@@ -35,7 +35,7 @@ fn parse_publish(
 #[command(rename_rule = "lowercase")]
 pub enum Command {
   Start,
-  // Admin commands only below - users use button interface
+  // Admin commands below - users use button interface
   Help,
   Users,
   Gen(String),
@@ -56,8 +56,33 @@ pub enum Command {
     version: String,
     changelog: String,
   },
+  /// Yank (remove from downloads) a build version
+  Yank(String),
+  /// Alias for /yank (deprecated)
+  #[command(hide)]
   Deactivate(String),
 }
+
+const ADMIN_HELP: &str = "\
+<b>📋 Admin Commands</b>
+
+<b>License Management:</b>
+/gen &lt;user_id&gt; [days] - Generate new license
+/buy &lt;key&gt; &lt;days&gt; - Extend license duration
+/ban &lt;key&gt; - Block license and drop sessions
+/unban &lt;key&gt; - Unblock license
+/info &lt;key|user_id&gt; - Show license or user details
+
+<b>Build Management:</b>
+/builds - List all builds
+/publish &lt;file&gt; &lt;ver&gt; [log] - Publish new build
+/yank &lt;version&gt; - Remove build from downloads
+
+<b>System:</b>
+/users - List all registered users
+/stats - Show active sessions count
+/backup - Manual database backup
+/help - Show this message";
 
 pub async fn handle(
   app: Arc<AppState>,
@@ -68,17 +93,30 @@ pub async fn handle(
 
   let _ = sv.user.get_or_create(bot.user_id).await;
 
-  if let Command::Start = &cmd {
-    let text = "<b>Yet Another Counter Strike Pbot.anel!</b>\n\n\
-      Use the buttons below to navigate.\n\
-      Read docs: https://yacsp.gitbook.io/yacsp\n\
-      Contact support: @y_a_c_s_p";
-    bot
-      .reply_with_keyboard(
-        text,
-        super::callback::main_menu(sv.license.is_promo_active()),
-      )
-      .await?;
+  match &cmd {
+    Command::Start => {
+      let text = "<b>Yet Another Counter Strike Panel!</b>\n\n\
+        Use the buttons below to navigate.\n\
+        Read docs: https://yacsp.gitbook.io/yacsp\n\
+        Contact support: @y_a_c_s_p";
+      bot
+        .reply_with_keyboard(
+          text,
+          super::callback::main_menu(sv.license.is_promo_active()),
+        )
+        .await?;
+    }
+    Command::Help if app.admins.contains(&bot.user_id) => {
+      bot.reply_html(ADMIN_HELP).await?;
+      return Ok(());
+    }
+    Command::Help => {
+      bot
+        .reply_html("Use /start to access the main menu with buttons.")
+        .await?;
+      return Ok(());
+    }
+    _ => {}
   }
 
   if app.admins.contains(&bot.user_id) {
@@ -270,11 +308,11 @@ async fn handle_admin_command(
 
           if lic.expires_at > now {
             has_valid = true;
-            if let Some(sessions) = app.sessions.get(&lic.key) {
-              if !sessions.is_empty() {
-                has_online = true;
-                break; 
-              }
+            if let Some(sessions) = app.sessions.get(&lic.key)
+              && !sessions.is_empty()
+            {
+              has_online = true;
+              break;
             }
           }
         }
@@ -413,7 +451,7 @@ async fn handle_admin_command(
       }
     }
 
-    Command::Deactivate(version) => {
+    Command::Yank(version) | Command::Deactivate(version) => {
       async {
         let build =
           sv.build.by_version(&version).await?.ok_or(Error::BuildNotFound)?;
@@ -422,7 +460,7 @@ async fn handle_admin_command(
         }
         sv.build.deactivate(&version).await?;
         Ok(format!(
-          "✅ Build deactivated.\n\n\
+          "✅ Build yanked (removed from downloads).\n\n\
         <b>Version:</b> {}\n\
         <b>Downloads:</b> {}",
           build.version, build.downloads

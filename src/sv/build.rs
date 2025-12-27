@@ -9,6 +9,7 @@ impl<'a> Build<'a> {
     Self { db }
   }
 
+  #[allow(dead_code)]
   pub async fn latest(&self) -> Result<Option<build::Model>> {
     let build = build::Entity::find()
       .filter(build::Column::IsActive.eq(true))
@@ -80,6 +81,17 @@ impl<'a> Build<'a> {
 
   pub async fn all(&self) -> Result<Vec<build::Model>> {
     let builds = build::Entity::find()
+      .order_by_desc(build::Column::CreatedAt)
+      .all(self.db)
+      .await?;
+
+    Ok(builds)
+  }
+
+  /// Get all active builds (available for download)
+  pub async fn active(&self) -> Result<Vec<build::Model>> {
+    let builds = build::Entity::find()
+      .filter(build::Column::IsActive.eq(true))
       .order_by_desc(build::Column::CreatedAt)
       .all(self.db)
       .await?;

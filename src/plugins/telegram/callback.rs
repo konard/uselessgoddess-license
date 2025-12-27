@@ -12,14 +12,13 @@ use crate::{
   state::{AppState, Services},
 };
 
-// TODO: use struct or enum
 const CB_PROFILE: &str = "profile";
 const CB_LICENSE: &str = "license";
 const CB_TRIAL: &str = "trial";
 const CB_DOWNLOAD: &str = "download";
+const CB_DL_VER: &str = "dl_ver:"; // download specific version
 const CB_BUY: &str = "buy";
 const CB_PAY_MANUAL: &str = "pay_man";
-// const CB_PAY_CRYPTO: &str = "pay_cry";
 const CB_BACK: &str = "back";
 
 pub fn main_menu(is_promo: bool) -> InlineKeyboardMarkup {
@@ -112,6 +111,10 @@ pub async fn handle(
       bot
         .edit_with_keyboard(text, main_menu(sv.license.is_promo_active()))
         .await?;
+    }
+    _ if data.starts_with(CB_DL_VER) => {
+      let version = &data[CB_DL_VER.len()..];
+      handle_download_version(&sv, &bot, &app, version).await?;
     }
     _ => {}
   }
@@ -252,8 +255,54 @@ async fn handle_download(
   bot: &ReplyBot,
   app: &AppState,
 ) -> ResponseResult<()> {
-  match sv.build.latest().await {
-    Ok(Some(build)) => {
+  let builds = sv.build.active().await.unwrap_or_default();
+
+  if builds.is_empty() {
+    bot
+      .edit_with_keyboard(
+        "❌ No builds available yet. Contact support.",
+        back_keyboard(),
+      )
+      .await?;
+    return Ok(());
+  }
+
+  // If only one version available, download directly
+  if builds.len() == 1 {
+    return handle_download_version(sv, bot, app, &builds[0].version).await;
+  }
+
+  // Multiple versions - show selection menu
+  let mut rows = Vec::new();
+  for build in &builds {
+    let label = if Some(build.id) == builds.first().map(|b| b.id) {
+      format!("📥 v{} (latest)", build.version)
+    } else {
+      format!("📥 v{}", build.version)
+    };
+    rows.push(vec![InlineKeyboardButton::callback(
+      label,
+      format!("{}{}", CB_DL_VER, build.version),
+    )]);
+  }
+  rows.push(vec![InlineKeyboardButton::callback("« Back to Menu", CB_BACK)]);
+
+  let text = "📥 <b>Select Version</b>\n\n\
+    Choose which version to download:";
+
+  bot.edit_with_keyboard(text, InlineKeyboardMarkup::new(rows)).await?;
+
+  Ok(())
+}
+
+async fn handle_download_version(
+  sv: &Services<'_>,
+  bot: &ReplyBot,
+  app: &AppState,
+  version: &str,
+) -> ResponseResult<()> {
+  match sv.build.by_version(version).await {
+    Ok(Some(build)) if build.is_active => {
       let path = Path::new(&build.file_path);
       if path.exists() {
         let token = app.create_download_token(&build.version);
@@ -283,7 +332,7 @@ async fn handle_download(
     _ => {
       bot
         .edit_with_keyboard(
-          "❌ No builds available yet. Contact support.",
+          "❌ Build not available. Contact support.",
           back_keyboard(),
         )
         .await?;
