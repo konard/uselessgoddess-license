@@ -240,7 +240,7 @@ mod tests {
     let license = sv.create(12345, LicenseType::Trial, 1).await.unwrap();
 
     let old_exp = license.expires_at;
-    let new_exp = sv.extend(&license.key, 30).await.unwrap();
+    let new_exp = sv.expires(&license.key, 30).await.unwrap();
 
     assert!(new_exp > old_exp);
   }
