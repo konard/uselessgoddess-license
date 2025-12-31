@@ -74,7 +74,7 @@ impl<'a> License<'a> {
     Ok(license)
   }
 
-  pub async fn extend(&self, key: &str, days: i64) -> Result<DateTime> {
+  pub async fn expires(&self, key: &str, days: i64) -> Result<DateTime> {
     let txn = self.db.begin().await?;
 
     let license = license::Entity::find_by_id(key)
@@ -82,10 +82,7 @@ impl<'a> License<'a> {
       .await?
       .ok_or(Error::LicenseNotFound)?;
 
-    let now = Utc::now().naive_utc();
-    let base_time =
-      if license.expires_at < now { now } else { license.expires_at };
-    let new_exp = base_time + Duration::from_hours(24 * days as u64);
+    let new_exp = Utc::now().naive_utc() + Duration::from_hours(24 * days as u64);
 
     license::ActiveModel {
       expires_at: Set(new_exp),

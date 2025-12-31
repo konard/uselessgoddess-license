@@ -370,9 +370,9 @@ async fn handle_admin_command(
     }
 
     Command::Buy { key, days } => {
-      sv.license.extend(&key, days).await.map(|new_exp| {
+      sv.license.expires(&key, days).await.map(|new_exp| {
         format!(
-          "✅ Key extended by {days} days.\nNew expiry: <code>{}</code>",
+          "✅ Key expires after {days} days.\nNew expiry: <code>{}</code>",
           utils::format_date(new_exp)
         )
       })
