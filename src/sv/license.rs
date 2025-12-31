@@ -82,7 +82,8 @@ impl<'a> License<'a> {
       .await?
       .ok_or(Error::LicenseNotFound)?;
 
-    let new_exp = Utc::now().naive_utc() + Duration::from_hours(24 * days as u64);
+    let new_exp =
+      Utc::now().naive_utc() + Duration::from_hours(24 * days as u64);
 
     license::ActiveModel {
       expires_at: Set(new_exp),
