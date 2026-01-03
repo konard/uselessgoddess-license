@@ -126,6 +126,7 @@ async fn main() {
     .register(cron::Sync)
     .register(cron::Backup)
     .register(cron::StatsClean)
+    .register(cron::YankedBuildsGC)
     //
     .register(steam::FreeGames)
     .register(steam::FreeRewards)

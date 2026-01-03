@@ -1,3 +1,7 @@
+use std::path::Path;
+
+use tokio::fs;
+
 use crate::{entity::*, prelude::*};
 
 pub struct Build<'a> {
@@ -131,5 +135,36 @@ impl<'a> Build<'a> {
       .await?;
 
     Ok(result.unwrap_or(0) as u64)
+  }
+
+  /// Get all yanked (inactive) builds ordered by creation date (oldest first)
+  pub async fn yanked_oldest_first(&self) -> Result<Vec<build::Model>> {
+    let builds = build::Entity::find()
+      .filter(build::Column::IsActive.eq(false))
+      .order_by_asc(build::Column::CreatedAt)
+      .all(self.db)
+      .await?;
+
+    Ok(builds)
+  }
+
+  /// Delete a build from database and remove its file from disk
+  pub async fn delete(&self, version: &str) -> Result<build::Model> {
+    let build = build::Entity::find()
+      .filter(build::Column::Version.eq(version))
+      .one(self.db)
+      .await?
+      .ok_or(Error::BuildNotFound)?;
+
+    // Remove file from disk if it exists
+    let path = Path::new(&build.file_path);
+    if path.exists() {
+      fs::remove_file(path).await.ok();
+    }
+
+    // Delete from database
+    build::Entity::delete_by_id(build.id).exec(self.db).await?;
+
+    Ok(build)
   }
 }
