@@ -245,22 +245,22 @@ async fn handle_profile_view(
   );
 
   // Show referral info for creators/admins
-  if let Some(ref_stats) = referral_stats {
-    if ref_stats.is_active {
-      text.push_str(&format!(
-        "\n\n<b>🔗 Referral Info:</b>\n\
+  if let Some(ref_stats) = referral_stats
+    && ref_stats.is_active
+  {
+    text.push_str(&format!(
+      "\n\n<b>🔗 Referral Info:</b>\n\
         Your referral code: <code>{}</code>\n\
         Commission rate: {}%\n\
         Customer discount: {}%\n\
         Total sales: {}\n\
         Total earnings: {}",
-        bot.user_id,
-        ref_stats.commission_rate,
-        ref_stats.discount_percent,
-        ref_stats.total_sales,
-        format_usdt(ref_stats.total_earnings)
-      ));
-    }
+      bot.user_id,
+      ref_stats.commission_rate,
+      ref_stats.discount_percent,
+      ref_stats.total_sales,
+      format_usdt(ref_stats.total_earnings)
+    ));
   }
 
   if let Some(s) = stats {
