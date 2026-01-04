@@ -158,12 +158,10 @@ impl<'a> License<'a> {
     }
 
     // Update the license with the new user
-    let updated = license::ActiveModel {
-      tg_user_id: Set(tg_user_id),
-      ..license.into()
-    }
-    .update(self.db)
-    .await?;
+    let updated =
+      license::ActiveModel { tg_user_id: Set(tg_user_id), ..license.into() }
+        .update(self.db)
+        .await?;
 
     Ok(updated)
   }

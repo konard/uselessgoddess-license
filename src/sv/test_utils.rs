@@ -2,7 +2,9 @@
 
 #[cfg(test)]
 pub mod test_db {
-  use sea_orm::{ConnectionTrait, Database, DatabaseConnection, DbBackend, Schema};
+  use sea_orm::{
+    ConnectionTrait, Database, DatabaseConnection, DbBackend, Schema,
+  };
 
   use crate::entity::*;
 

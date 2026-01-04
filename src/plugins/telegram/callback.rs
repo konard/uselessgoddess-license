@@ -153,7 +153,8 @@ pub async fn handle(
     Callback::Buy => {
       let user = sv.user.by_id(bot.user_id).await.ok().flatten();
       let balance = user.map(|u| u.balance).unwrap_or(0);
-      let balance_str = format!("${:.2}", balance as f64 / CENTS_PER_DOLLAR as f64);
+      let balance_str =
+        format!("${:.2}", balance as f64 / CENTS_PER_DOLLAR as f64);
 
       let text = format!(
         "💳 <b>Purchase License</b>\n\n\
@@ -220,11 +221,7 @@ async fn handle_profile_view(
   let user = sv.user.by_id(bot.user_id).await.ok().flatten();
 
   let (reg_date, balance, role) = match &user {
-    Some(u) => (
-      utils::format_date(u.reg_date),
-      u.balance,
-      u.role.clone(),
-    ),
+    Some(u) => (utils::format_date(u.reg_date), u.balance, u.role.clone()),
     None => ("Unknown".into(), 0, UserRole::User),
   };
 
@@ -483,7 +480,9 @@ async fn handle_balance_view(
   if can_withdraw {
     text.push_str("\n<i>💸 As a creator, you can withdraw your balance to crypto.\nContact @y_a_c_s_p to process withdrawal.</i>\n");
   } else {
-    text.push_str("\n<i>💡 Your balance can be used for license purchases.</i>\n");
+    text.push_str(
+      "\n<i>💡 Your balance can be used for license purchases.</i>\n",
+    );
   }
 
   if !referral_codes.is_empty() {
