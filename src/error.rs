@@ -20,6 +20,8 @@ pub enum Error {
   UserNotFound,
   #[error("License expired or blocked")]
   LicenseInvalid,
+  #[error("License already linked to another user")]
+  LicenseAlreadyLinked,
   #[error("Session limit reached")]
   SessionLimitReached,
   #[error("Promo is {0:?}")]
@@ -54,6 +56,9 @@ impl Error {
       Error::LicenseNotFound => "Key not found".into(),
       Error::UserNotFound => "User not found".into(),
       Error::LicenseInvalid => "License expired or blocked".into(),
+      Error::LicenseAlreadyLinked => {
+        "This license is already linked to another user".into()
+      }
       Error::SessionLimitReached => "Session limit reached".into(),
       Error::Promo(Promo::Inactive) => "Promo is not active right now".into(),
       Error::Promo(Promo::Claimed) => {
@@ -86,6 +91,9 @@ impl IntoResponse for Error {
       Error::UserNotFound => (StatusCode::NOT_FOUND, "User not found"),
       Error::LicenseInvalid => {
         (StatusCode::FORBIDDEN, "License expired or blocked")
+      }
+      Error::LicenseAlreadyLinked => {
+        (StatusCode::CONFLICT, "License already linked to another user")
       }
       Error::SessionLimitReached => {
         (StatusCode::CONFLICT, "Session limit reached")

@@ -48,10 +48,10 @@ impl MigrationTrait for Migration {
               .default(25),
           )
           .col(
-            ColumnDef::new(ReferralCodes::BonusDays)
+            ColumnDef::new(ReferralCodes::DiscountPercent)
               .integer()
               .not_null()
-              .default(5),
+              .default(3),
           )
           .col(
             ColumnDef::new(ReferralCodes::TotalSales)
@@ -168,7 +168,7 @@ pub enum ReferralCodes {
   Code,
   OwnerId,
   CommissionRate,
-  BonusDays,
+  DiscountPercent,
   TotalSales,
   TotalEarnings,
   IsActive,

@@ -4,6 +4,8 @@ pub mod license;
 pub mod referral;
 pub mod stats;
 pub mod steam;
+#[cfg(test)]
+pub mod test_utils;
 pub mod user;
 
 pub use balance::Balance;

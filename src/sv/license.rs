@@ -139,6 +139,35 @@ impl<'a> License<'a> {
     Ok(count)
   }
 
+  pub async fn link_to_user(
+    &self,
+    key: &str,
+    tg_user_id: i64,
+  ) -> Result<license::Model> {
+    // Ensure the user exists
+    sv::User::new(self.db).get_or_create(tg_user_id).await?;
+
+    let license = license::Entity::find_by_id(key)
+      .one(self.db)
+      .await?
+      .ok_or(Error::LicenseNotFound)?;
+
+    // Check if license is already linked to a different user
+    if license.tg_user_id != 0 && license.tg_user_id != tg_user_id {
+      return Err(Error::LicenseAlreadyLinked);
+    }
+
+    // Update the license with the new user
+    let updated = license::ActiveModel {
+      tg_user_id: Set(tg_user_id),
+      ..license.into()
+    }
+    .update(self.db)
+    .await?;
+
+    Ok(updated)
+  }
+
   pub async fn claim_promo(
     &self,
     tg_user_id: i64,
@@ -177,31 +206,12 @@ impl<'a> License<'a> {
 
 #[cfg(test)]
 mod tests {
-  use sea_orm::{ConnectionTrait, Database, DbBackend, Schema};
-
   use super::*;
-  use crate::entity::*;
-
-  async fn setup_test_db() -> DatabaseConnection {
-    let db = Database::connect("sqlite::memory:").await.unwrap();
-
-    let schema = Schema::new(DbBackend::Sqlite);
-
-    let stmt = schema.create_table_from_entity(user::Entity);
-    db.execute(db.get_database_backend().build(&stmt)).await.unwrap();
-
-    let stmt = schema.create_table_from_entity(license::Entity);
-    db.execute(db.get_database_backend().build(&stmt)).await.unwrap();
-
-    let stmt = schema.create_table_from_entity(promo::Entity);
-    db.execute(db.get_database_backend().build(&stmt)).await.unwrap();
-
-    db
-  }
+  use crate::sv::test_utils::test_db;
 
   #[tokio::test]
   async fn test_create_license() {
-    let db = setup_test_db().await;
+    let db = test_db::setup().await;
 
     let license =
       License::new(&db).create(12345, LicenseType::Pro, 30).await.unwrap();
@@ -213,7 +223,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_validate_license() {
-    let db = setup_test_db().await;
+    let db = test_db::setup().await;
     let sv = License::new(&db);
 
     let license = sv.create(12345, LicenseType::Trial, 30).await.unwrap();
@@ -224,7 +234,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_block_license() {
-    let db = setup_test_db().await;
+    let db = test_db::setup().await;
     let sv = License::new(&db);
 
     let license = sv.create(12345, LicenseType::Trial, 30).await.unwrap();
@@ -239,7 +249,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_extend_license() {
-    let db = setup_test_db().await;
+    let db = test_db::setup().await;
     let sv = License::new(&db);
 
     let license = sv.create(12345, LicenseType::Trial, 1).await.unwrap();

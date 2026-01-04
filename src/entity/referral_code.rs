@@ -10,7 +10,7 @@ pub struct Model {
   pub code: String,
   pub owner_id: i64,
   pub commission_rate: i32,
-  pub bonus_days: i32,
+  pub discount_percent: i32,
   pub total_sales: i32,
   pub total_earnings: i64,
   pub is_active: bool,

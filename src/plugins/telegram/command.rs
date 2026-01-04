@@ -64,6 +64,7 @@ fn parse_buy(
 pub enum Command {
   Start,
   Help,
+  Link(String),
   Users,
   Gen(String),
   #[command(parse_with = parse_buy)]
@@ -114,7 +115,7 @@ const ADMIN_HELP: &str = "\
 
 <b>Referral System:</b>
 /setrole &lt;user_id&gt; &lt;role&gt; - Set user role (user/creator/admin)
-/createref &lt;code&gt; [rate] [days] - Create referral code
+/createref &lt;code&gt; [rate%] [discount%] - Create referral code
 /refs - List all referral codes
 /refstats - Show referral statistics
 
@@ -159,6 +160,23 @@ pub async fn handle(
       bot
         .reply_html("Use /start to access the main menu with buttons.")
         .await?;
+      return Ok(());
+    }
+    Command::Link(key) => {
+      let result = sv.license.link_to_user(key.trim(), bot.user_id).await;
+      match result {
+        Ok(_) => {
+          bot
+            .reply_html(format!(
+              "✅ License <code>{}</code> has been linked to your account!",
+              key.trim()
+            ))
+            .await?;
+        }
+        Err(e) => {
+          bot.reply_html(format!("❌ {}", e.user_message())).await?;
+        }
+      }
       return Ok(());
     }
     _ => {}
@@ -603,32 +621,33 @@ async fn handle_admin_command(
     Command::CreateRef(args) => {
       async {
         let parts: Vec<&str> = args.split_whitespace().collect();
-        let (code, rate, bonus_days) = match parts.as_slice() {
-          [code] => (code.to_string(), 25, 5),
+        // Default: 25% commission, 3% discount for buyers
+        let (code, rate, discount) = match parts.as_slice() {
+          [code] => (code.to_string(), 25, 3),
           [code, rate_str] => {
             let rate = rate_str.parse::<i32>().unwrap_or(25);
-            (code.to_string(), rate, 5)
+            (code.to_string(), rate, 3)
           }
-          [code, rate_str, days_str] => {
+          [code, rate_str, discount_str] => {
             let rate = rate_str.parse::<i32>().unwrap_or(25);
-            let days = days_str.parse::<i32>().unwrap_or(5);
-            (code.to_string(), rate, days)
+            let discount = discount_str.parse::<i32>().unwrap_or(3);
+            (code.to_string(), rate, discount)
           }
           _ => {
             return Err(Error::InvalidArgs(
-              "Usage: /createref <code> [rate%] [bonus_days]".into(),
+              "Usage: /createref <code> [rate%] [discount%]".into(),
             ));
           }
         };
         sv.referral
-          .create_code(bot.user_id, code.clone(), rate, bonus_days)
+          .create_code(bot.user_id, code.clone(), rate, discount)
           .await?;
         Ok(format!(
           "✅ Referral code created!\n\
           <b>Code:</b> <code>{}</code>\n\
           <b>Commission:</b> {}%\n\
-          <b>Bonus days:</b> {}",
-          code, rate, bonus_days
+          <b>Buyer discount:</b> {}%",
+          code, rate, discount
         ))
       }
       .await
@@ -647,13 +666,13 @@ async fn handle_admin_command(
             text.push_str(&format!(
               "{} <code>{}</code>\n\
               Owner: <code>{}</code>\n\
-              Rate: {}% | Bonus: {}d\n\
+              Rate: {}% | Discount: {}%\n\
               Sales: {} | Earned: ${:.2}\n\n",
               status,
               r.code,
               r.owner_id,
               r.commission_rate,
-              r.bonus_days,
+              r.discount_percent,
               r.total_sales,
               earnings
             ));

@@ -254,28 +254,12 @@ impl<'a> Balance<'a> {
 
 #[cfg(test)]
 mod tests {
-  use sea_orm::{ConnectionTrait, Database, DbBackend, Schema};
-
   use super::*;
-  use crate::entity::*;
-
-  async fn setup_test_db() -> DatabaseConnection {
-    let db = Database::connect("sqlite::memory:").await.unwrap();
-
-    let schema = Schema::new(DbBackend::Sqlite);
-
-    let stmt = schema.create_table_from_entity(user::Entity);
-    db.execute(db.get_database_backend().build(&stmt)).await.unwrap();
-
-    let stmt = schema.create_table_from_entity(transaction::Entity);
-    db.execute(db.get_database_backend().build(&stmt)).await.unwrap();
-
-    db
-  }
+  use crate::{entity::*, sv::test_utils::test_db};
 
   #[tokio::test]
   async fn test_deposit() {
-    let db = setup_test_db().await;
+    let db = test_db::setup().await;
 
     let now = Utc::now().naive_utc();
     user::ActiveModel {
@@ -299,7 +283,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_spend() {
-    let db = setup_test_db().await;
+    let db = test_db::setup().await;
 
     let now = Utc::now().naive_utc();
     user::ActiveModel {
@@ -323,7 +307,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_insufficient_balance() {
-    let db = setup_test_db().await;
+    let db = test_db::setup().await;
 
     let now = Utc::now().naive_utc();
     user::ActiveModel {
@@ -344,7 +328,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_withdrawal_requires_creator_role() {
-    let db = setup_test_db().await;
+    let db = test_db::setup().await;
 
     let now = Utc::now().naive_utc();
     user::ActiveModel {
@@ -365,7 +349,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_creator_can_withdraw() {
-    let db = setup_test_db().await;
+    let db = test_db::setup().await;
 
     let now = Utc::now().naive_utc();
     user::ActiveModel {

@@ -75,10 +75,6 @@ pub fn main_menu(is_promo: bool) -> InlineKeyboardMarkup {
       Callback::License.to_data(),
     )],
     vec![InlineKeyboardButton::callback(
-      "💰 My Balance",
-      Callback::Balance.to_data(),
-    )],
-    vec![InlineKeyboardButton::callback(
       "💳 Buy License",
       Callback::Buy.to_data(),
     )],
@@ -155,9 +151,17 @@ pub async fn handle(
       }
     }
     Callback::Buy => {
-      let text = "💳 <b>Purchase License</b>\n\n\
-        Select a payment method below.";
-      bot.edit_with_keyboard(text, payment_method_menu()).await?;
+      let user = sv.user.by_id(bot.user_id).await.ok().flatten();
+      let balance = user.map(|u| u.balance).unwrap_or(0);
+      let balance_str = format!("${:.2}", balance as f64 / CENTS_PER_DOLLAR as f64);
+
+      let text = format!(
+        "💳 <b>Purchase License</b>\n\n\
+        <b>Your Balance:</b> {}\n\n\
+        Select a payment method below.",
+        balance_str
+      );
+      bot.edit_with_keyboard(&text, payment_method_menu()).await?;
     }
     Callback::PayManual => {
       let text = "👤 <b>Manual Purchase</b>\n\n\
@@ -188,14 +192,12 @@ pub async fn handle(
       handle_download_version(&sv, &bot, &app, &version).await?;
     }
     Callback::HaveLicense => {
-      let text = "🔑 <b>Enter Your License</b>\n\n\
+      let text = "🔑 <b>Link Your License</b>\n\n\
         If you already have a license key, you can link it to your account.\n\n\
         <b>To link a license:</b>\n\
-        1. Contact support at @y_a_c_s_p\n\
-        2. Provide your license key and user ID\n\
-        3. Support will link the license to your account\n\n\
+        Send the command: <code>/link YOUR_LICENSE_KEY</code>\n\n\
         <b>Your User ID:</b> <code>{}</code>\n\n\
-        <i>Note: You can also provide a referral code when purchasing to get bonus days!</i>";
+        <i>Note: Use a referral code when purchasing to get a discount!</i>";
       bot
         .edit_with_keyboard(
           text.replace("{}", &bot.user_id.to_string()),
@@ -217,18 +219,31 @@ async fn handle_profile_view(
 ) -> ResponseResult<()> {
   let user = sv.user.by_id(bot.user_id).await.ok().flatten();
 
-  let reg_date = match user {
-    Some(u) => utils::format_date(u.reg_date),
-    None => "Unknown".into(),
+  let (reg_date, balance, role) = match &user {
+    Some(u) => (
+      utils::format_date(u.reg_date),
+      u.balance,
+      u.role.clone(),
+    ),
+    None => ("Unknown".into(), 0, UserRole::User),
   };
 
   let stats = sv.stats.display_stats(bot.user_id).await.ok();
 
+  let balance_str = format!("${:.2}", balance as f64 / CENTS_PER_DOLLAR as f64);
+  let role_str = match role {
+    UserRole::User => "User",
+    UserRole::Creator => "Creator",
+    UserRole::Admin => "Admin",
+  };
+
   let mut text = format!(
     "👤 <b>My Profile</b>\n\n\
     <b>User ID:</b> <code>{}</code>\n\
-    <b>Registered:</b> {}",
-    bot.user_id, reg_date
+    <b>Registered:</b> {}\n\
+    <b>Balance:</b> {}\n\
+    <b>Role:</b> {}",
+    bot.user_id, reg_date, balance_str, role_str
   );
 
   if let Some(s) = stats {
@@ -468,7 +483,7 @@ async fn handle_balance_view(
   if can_withdraw {
     text.push_str("\n<i>💸 As a creator, you can withdraw your balance to crypto.\nContact @y_a_c_s_p to process withdrawal.</i>\n");
   } else {
-    text.push_str("\n<i>💡 Your balance can be used for license purchases or cashback from referrals.</i>\n");
+    text.push_str("\n<i>💡 Your balance can be used for license purchases.</i>\n");
   }
 
   if !referral_codes.is_empty() {

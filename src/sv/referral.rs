@@ -25,7 +25,7 @@ impl<'a> Referral<'a> {
     owner_id: i64,
     code: String,
     commission_rate: i32,
-    bonus_days: i32,
+    discount_percent: i32,
   ) -> Result<referral_code::Model> {
     let user = sv::User::new(self.db).get_or_create(owner_id).await?;
 
@@ -44,7 +44,7 @@ impl<'a> Referral<'a> {
       code: Set(code),
       owner_id: Set(owner_id),
       commission_rate: Set(commission_rate),
-      bonus_days: Set(bonus_days),
+      discount_percent: Set(discount_percent),
       total_sales: Set(0),
       total_earnings: Set(0),
       is_active: Set(true),
@@ -157,28 +157,12 @@ impl<'a> Referral<'a> {
 
 #[cfg(test)]
 mod tests {
-  use sea_orm::{ConnectionTrait, Database, DbBackend, Schema};
-
   use super::*;
-  use crate::entity::*;
-
-  async fn setup_test_db() -> DatabaseConnection {
-    let db = Database::connect("sqlite::memory:").await.unwrap();
-
-    let schema = Schema::new(DbBackend::Sqlite);
-
-    let stmt = schema.create_table_from_entity(user::Entity);
-    db.execute(db.get_database_backend().build(&stmt)).await.unwrap();
-
-    let stmt = schema.create_table_from_entity(referral_code::Entity);
-    db.execute(db.get_database_backend().build(&stmt)).await.unwrap();
-
-    db
-  }
+  use crate::{entity::*, sv::test_utils::test_db};
 
   #[tokio::test]
   async fn test_create_referral_code() {
-    let db = setup_test_db().await;
+    let db = test_db::setup().await;
 
     let now = Utc::now().naive_utc();
     user::ActiveModel {
@@ -193,19 +177,19 @@ mod tests {
     .unwrap();
 
     let code = Referral::new(&db)
-      .create_code(12345, "TEST123".to_string(), 25, 5)
+      .create_code(12345, "TEST123".to_string(), 25, 3)
       .await
       .unwrap();
 
     assert_eq!(code.code, "TEST123");
     assert_eq!(code.commission_rate, 25);
-    assert_eq!(code.bonus_days, 5);
+    assert_eq!(code.discount_percent, 3);
     assert!(code.is_active);
   }
 
   #[tokio::test]
   async fn test_regular_user_cannot_create_code() {
-    let db = setup_test_db().await;
+    let db = test_db::setup().await;
 
     let now = Utc::now().naive_utc();
     user::ActiveModel {
@@ -220,14 +204,14 @@ mod tests {
     .unwrap();
 
     let result =
-      Referral::new(&db).create_code(12345, "TEST123".to_string(), 25, 5).await;
+      Referral::new(&db).create_code(12345, "TEST123".to_string(), 25, 3).await;
 
     assert!(result.is_err());
   }
 
   #[tokio::test]
   async fn test_record_sale() {
-    let db = setup_test_db().await;
+    let db = test_db::setup().await;
 
     let now = Utc::now().naive_utc();
     user::ActiveModel {
@@ -242,7 +226,7 @@ mod tests {
     .unwrap();
 
     Referral::new(&db)
-      .create_code(12345, "TEST123".to_string(), 25, 5)
+      .create_code(12345, "TEST123".to_string(), 25, 3)
       .await
       .unwrap();
 
