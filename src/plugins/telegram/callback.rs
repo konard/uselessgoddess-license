@@ -23,6 +23,7 @@ pub enum Callback {
   Download,
   DownloadVersion(String),
   Buy,
+  PayCrypto,
   PayManual,
   HaveLicense,
   Back,
@@ -37,6 +38,7 @@ impl Callback {
       Callback::Download => "download".to_string(),
       Callback::DownloadVersion(v) => format!("dl_ver:{}", v),
       Callback::Buy => "buy".to_string(),
+      Callback::PayCrypto => "pay_crypto".to_string(),
       Callback::PayManual => "pay_man".to_string(),
       Callback::HaveLicense => "have_lic".to_string(),
       Callback::Back => "back".to_string(),
@@ -50,6 +52,7 @@ impl Callback {
       "trial" => Some(Callback::Trial),
       "download" => Some(Callback::Download),
       "buy" => Some(Callback::Buy),
+      "pay_crypto" => Some(Callback::PayCrypto),
       "pay_man" => Some(Callback::PayManual),
       "have_lic" => Some(Callback::HaveLicense),
       "back" => Some(Callback::Back),
@@ -93,6 +96,10 @@ pub fn main_menu(is_promo: bool) -> InlineKeyboardMarkup {
 
 fn payment_method_menu() -> InlineKeyboardMarkup {
   InlineKeyboardMarkup::new(vec![
+    vec![InlineKeyboardButton::callback(
+      "💳 Pay with Crypto",
+      Callback::PayCrypto.to_data(),
+    )],
     vec![InlineKeyboardButton::callback(
       "👤 Manual Purchase",
       Callback::PayManual.to_data(),
@@ -164,6 +171,27 @@ pub async fn handle(
         balance_str
       );
       bot.edit_with_keyboard(&text, payment_method_menu()).await?;
+    }
+    Callback::PayCrypto => {
+      let text = "💳 <b>Pay with Crypto</b>\n\n\
+        You can deposit USDT (or other crypto) to your account balance using CryptoBot.\n\n\
+        <b>Pricing:</b>\n\
+        • 1 Month License: <b>10 USDT</b>\n\
+        • 3 Month License: <b>25 USDT</b>\n\n\
+        <b>To deposit funds:</b>\n\
+        Open @CryptoBot and send USDT to this app.\n\n\
+        <i>💡 If you have a referrer code (user ID), you can get a discount when purchasing!</i>\n\n\
+        Contact @y_a_c_s_p for help with deposits.";
+
+      let kb = InlineKeyboardMarkup::new(vec![
+        vec![InlineKeyboardButton::url(
+          "Open CryptoBot",
+          Url::parse("https://t.me/CryptoBot").expect("invalid link"),
+        )],
+        vec![InlineKeyboardButton::callback("« Back", Callback::Buy.to_data())],
+      ]);
+
+      bot.edit_with_keyboard(text, kb).await?;
     }
     Callback::PayManual => {
       let text = "👤 <b>Manual Purchase</b>\n\n\

@@ -1,5 +1,6 @@
 pub mod balance;
 pub mod build;
+pub mod cryptobot;
 pub mod license;
 pub mod referral;
 pub mod stats;

@@ -42,6 +42,10 @@ pub enum Error {
   WithdrawalNotAllowed,
   #[error("Invalid arguments: {0}")]
   InvalidArgs(String),
+  #[error("CryptoBot API error: {0}")]
+  CryptoBot(String),
+  #[error("Invoice not found")]
+  InvoiceNotFound,
   #[error("DB error: {0}")]
   Database(#[from] sea_orm::DbErr),
   #[error("IO error: {0}")]
@@ -74,6 +78,8 @@ impl Error {
         "Only creators can withdraw to crypto".into()
       }
       Error::InvalidArgs(msg) => msg.clone(),
+      Error::CryptoBot(msg) => format!("Payment error: {}", msg),
+      Error::InvoiceNotFound => "Invoice not found".into(),
       Error::Database(e) => format!("Database error: {}", e),
       Error::Io(e) => format!("IO error: {}", e),
       Error::Internal(msg) => format!("Internal error: {}", msg),
@@ -122,6 +128,8 @@ impl IntoResponse for Error {
         (StatusCode::FORBIDDEN, "Withdrawal not allowed")
       }
       Error::InvalidArgs(msg) => (StatusCode::BAD_REQUEST, msg.as_str()),
+      Error::CryptoBot(_) => (StatusCode::BAD_GATEWAY, "Payment service error"),
+      Error::InvoiceNotFound => (StatusCode::NOT_FOUND, "Invoice not found"),
       Error::Io(_) => (StatusCode::INTERNAL_SERVER_ERROR, "IO error"),
       Error::Internal(_) => {
         (StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
