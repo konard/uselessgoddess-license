@@ -34,29 +34,41 @@ fn parse_publish(
 
 fn parse_buy(
   input: String,
-) -> std::result::Result<(String, Duration), ParseError> {
-  let mut parts = input.splitn(2, ' ');
-  let key = parts.next().unwrap_or_default().to_string();
-  let duration_str = parts.next().unwrap_or_default().to_string();
+) -> std::result::Result<(Option<String>, Duration), ParseError> {
+  let parts: Vec<&str> = input.split_whitespace().collect();
 
-  if key.is_empty() || duration_str.is_empty() {
-    return Err(ParseError::IncorrectFormat(
-      "Usage: /buy <key> <duration>\nExamples: /buy abc123 30d, /buy abc123 2w, /buy abc123 1h30m"
+  match parts.as_slice() {
+    // /buy <duration> - generate new license
+    [duration_str] => {
+      let duration = humantime::parse_duration(duration_str).map_err(|e| {
+        ParseError::IncorrectFormat(
+          format!(
+            "Invalid duration '{}': {}\nUsage: /buy <duration> or /buy <key> <duration>\nExamples: 30d, 2w, 1h30m",
+            duration_str, e
+          )
+          .into(),
+        )
+      })?;
+      Ok((None, duration))
+    }
+    // /buy <key> <duration> - extend existing license
+    [key, duration_str] => {
+      let duration = humantime::parse_duration(duration_str).map_err(|e| {
+        ParseError::IncorrectFormat(
+          format!(
+            "Invalid duration '{}': {}\nExamples: 30d, 2w, 1h30m, 7days",
+            duration_str, e
+          )
+          .into(),
+        )
+      })?;
+      Ok((Some(key.to_string()), duration))
+    }
+    _ => Err(ParseError::IncorrectFormat(
+      "Usage:\n/buy <duration> - Generate new license\n/buy <key> <duration> - Extend existing license\nExamples: /buy 30d, /buy abc123 2w"
         .into(),
-    ));
+    )),
   }
-
-  let duration = humantime::parse_duration(&duration_str).map_err(|e| {
-    ParseError::IncorrectFormat(
-      format!(
-        "Invalid duration '{}': {}\nExamples: 30d, 2w, 1h30m, 7days",
-        duration_str, e
-      )
-      .into(),
-    )
-  })?;
-
-  Ok((key, duration))
 }
 
 /// Format balance in USDT (stored as nanoUSDT internally)
@@ -70,11 +82,11 @@ pub enum Command {
   Start,
   Help,
   Link(String),
+  Ref(String),
   Users,
-  Gen(String),
   #[command(parse_with = parse_buy)]
   Buy {
-    key: String,
+    key: Option<String>,
     duration: Duration,
   },
   Ban(String),
@@ -105,8 +117,8 @@ const ADMIN_HELP: &str = "\
 <b>📋 Admin Commands</b>
 
 <b>License Management:</b>
-/gen &lt;user_id&gt; [days] - Generate new license
-/buy &lt;key&gt; &lt;duration&gt; - Extend license (e.g. 30d, 2w, 1h30m)
+/buy &lt;duration&gt; - Generate new license (e.g. 30d, 2w)
+/buy &lt;key&gt; &lt;duration&gt; - Extend existing license
 /ban &lt;key&gt; - Block license and drop sessions
 /unban &lt;key&gt; - Unblock license
 /info &lt;key|user_id&gt; - Show license or user details
@@ -178,6 +190,56 @@ pub async fn handle(
         }
         Err(e) => {
           bot.reply_html(format!("❌ {}", e.user_message())).await?;
+        }
+      }
+      return Ok(());
+    }
+    Command::Ref(arg) => {
+      let arg = arg.trim();
+      if arg.is_empty() || arg == "clear" || arg == "none" {
+        // Clear referral code
+        match sv.user.set_referred_by(bot.user_id, None).await {
+          Ok(_) => {
+            bot.reply_html("✅ Your referral code has been cleared.").await?;
+          }
+          Err(e) => {
+            bot.reply_html(format!("❌ {}", e.user_message())).await?;
+          }
+        }
+      } else {
+        // Set referral code (referrer's user ID)
+        match arg.parse::<i64>() {
+          Ok(referrer_id) => {
+            match sv.user.set_referred_by(bot.user_id, Some(referrer_id)).await
+            {
+              Ok(_) => {
+                // Get discount info
+                let discount = sv
+                  .referral
+                  .stats(referrer_id)
+                  .await
+                  .map(|s| s.discount_percent)
+                  .unwrap_or(0);
+                bot
+                  .reply_html(format!(
+                    "✅ Referral code set to <code>{}</code>\n\
+                    You will receive a {}% discount on purchases!",
+                    referrer_id, discount
+                  ))
+                  .await?;
+              }
+              Err(e) => {
+                bot.reply_html(format!("❌ {}", e.user_message())).await?;
+              }
+            }
+          }
+          Err(_) => {
+            bot
+              .reply_html(
+                "❌ Invalid referral code. Use: /ref <user_id> or /ref clear",
+              )
+              .await?;
+          }
         }
       }
       return Ok(());
@@ -427,34 +489,33 @@ async fn handle_admin_command(
   }
 
   let result: Result<String> = match cmd {
-    Command::Gen(args) => {
-      let parts: Vec<&str> = args.split_whitespace().collect();
-      let (target_user, days) = match parts.as_slice() {
-        [user_id] => (user_id.parse::<i64>().ok(), 0u64),
-        [user_id, days] => {
-          (user_id.parse::<i64>().ok(), days.parse::<u64>().unwrap_or(0))
-        }
-        _ => (None, 0),
-      };
-
-      match target_user {
-        Some(target_user) => sv
-          .license
-          .create(target_user, LicenseType::Pro, days)
-          .await
-          .map(|l| format!("✅ Key created:\n<code>{}</code>", l.key)),
-        None => Err(Error::InvalidArgs("Usage: /gen <user_id> [days]".into())),
-      }
-    }
-
     Command::Buy { key, duration } => {
-      sv.license.expires(&key, duration).await.map(|new_exp| {
-        let duration_str = humantime::format_duration(duration);
-        format!(
-          "✅ Key expires after {duration_str}.\nNew expiry: <code>{}</code>",
-          utils::format_date(new_exp)
-        )
-      })
+      let duration_str = humantime::format_duration(duration);
+      match key {
+        // /buy <duration> - generate new license for admin
+        None => {
+          let days = duration.as_secs() / 86400;
+          sv.license.create(bot.user_id, LicenseType::Pro, days).await.map(
+            |l| {
+              format!(
+                "✅ Key created ({}):\n<code>{}</code>\n\
+                Expires: {}",
+                duration_str,
+                l.key,
+                utils::format_date(l.expires_at)
+              )
+            },
+          )
+        }
+        // /buy <key> <duration> - extend existing license
+        Some(key) => sv.license.expires(&key, duration).await.map(|new_exp| {
+          format!(
+            "✅ Key extended by {}.\nNew expiry: <code>{}</code>",
+            duration_str,
+            utils::format_date(new_exp)
+          )
+        }),
+      }
     }
 
     Command::Ban(key) => {

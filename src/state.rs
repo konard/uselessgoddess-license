@@ -61,6 +61,7 @@ impl Default for Config {
   }
 }
 
+#[allow(dead_code)]
 pub struct Services<'a> {
   pub user: sv::User<'a>,
   pub stats: sv::Stats<'a>,
@@ -69,6 +70,7 @@ pub struct Services<'a> {
   pub steam: sv::Steam<'a>,
   pub referral: sv::Referral<'a>,
   pub balance: sv::Balance<'a>,
+  pub cryptobot: Option<&'a sv::cryptobot::CryptoBot>,
 }
 
 pub struct AppState {
@@ -79,6 +81,7 @@ pub struct AppState {
   pub download_tokens: DownloadTokens,
   pub secret: String,
   pub config: Config,
+  pub cryptobot: Option<sv::cryptobot::CryptoBot>,
   // Backup deduplication
   backup_hash: AtomicU64,
 }
@@ -103,8 +106,15 @@ impl AppState {
     admins: HashSet<i64>,
     secret: String,
   ) -> Self {
-    Self::with_config(db_url, bot_token, admins, secret, Config::default())
-      .await
+    Self::with_config(
+      db_url,
+      bot_token,
+      admins,
+      secret,
+      Config::default(),
+      None,
+    )
+    .await
   }
 
   pub async fn with_config(
@@ -113,6 +123,7 @@ impl AppState {
     admins: HashSet<i64>,
     secret: String,
     config: Config,
+    cryptobot: Option<sv::cryptobot::CryptoBot>,
   ) -> Self {
     info!("Connecting to database...");
     let db =
@@ -129,6 +140,7 @@ impl AppState {
       admins,
       secret,
       config,
+      cryptobot,
       backup_hash: AtomicU64::new(0),
     }
   }
@@ -142,6 +154,7 @@ impl AppState {
       steam: sv::Steam::new(&self.db),
       referral: sv::Referral::new(&self.db),
       balance: sv::Balance::new(&self.db),
+      cryptobot: self.cryptobot.as_ref(),
     }
   }
 

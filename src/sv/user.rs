@@ -54,27 +54,36 @@ impl<'a> User<'a> {
   }
 
   /// Set the referrer for a user (using referrer's user_id)
-  #[allow(dead_code)]
   pub async fn set_referred_by(
     &self,
     tg_user_id: i64,
-    referrer_id: i64,
+    referrer_id: Option<i64>,
   ) -> Result<()> {
     let user = user::Entity::find_by_id(tg_user_id)
       .one(self.db)
       .await?
       .ok_or(Error::UserNotFound)?;
 
-    if user.referred_by.is_some() {
-      return Err(Error::InvalidArgs("User already has a referrer".into()));
+    // If setting a new referrer (not clearing)
+    if let Some(ref_id) = referrer_id {
+      // Cannot refer yourself
+      if tg_user_id == ref_id {
+        return Err(Error::InvalidArgs("Cannot refer yourself".into()));
+      }
+
+      // Validate the referrer exists and is a creator/admin
+      let referrer = user::Entity::find_by_id(ref_id)
+        .one(self.db)
+        .await?
+        .ok_or(Error::ReferralNotFound)?;
+
+      if referrer.role != UserRole::Creator && referrer.role != UserRole::Admin
+      {
+        return Err(Error::ReferralInactive);
+      }
     }
 
-    // Cannot refer yourself
-    if tg_user_id == referrer_id {
-      return Err(Error::InvalidArgs("Cannot refer yourself".into()));
-    }
-
-    user::ActiveModel { referred_by: Set(Some(referrer_id)), ..user.into() }
+    user::ActiveModel { referred_by: Set(referrer_id), ..user.into() }
       .update(self.db)
       .await?;
 

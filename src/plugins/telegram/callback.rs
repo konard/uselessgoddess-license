@@ -24,8 +24,10 @@ pub enum Callback {
   DownloadVersion(String),
   Buy,
   PayCrypto,
+  PayCryptoAmount(String),
   PayManual,
   HaveLicense,
+  SetRef,
   Back,
 }
 
@@ -39,8 +41,10 @@ impl Callback {
       Callback::DownloadVersion(v) => format!("dl_ver:{}", v),
       Callback::Buy => "buy".to_string(),
       Callback::PayCrypto => "pay_crypto".to_string(),
+      Callback::PayCryptoAmount(a) => format!("pay_amt:{}", a),
       Callback::PayManual => "pay_man".to_string(),
       Callback::HaveLicense => "have_lic".to_string(),
+      Callback::SetRef => "set_ref".to_string(),
       Callback::Back => "back".to_string(),
     }
   }
@@ -55,9 +59,13 @@ impl Callback {
       "pay_crypto" => Some(Callback::PayCrypto),
       "pay_man" => Some(Callback::PayManual),
       "have_lic" => Some(Callback::HaveLicense),
+      "set_ref" => Some(Callback::SetRef),
       "back" => Some(Callback::Back),
       _ if data.starts_with("dl_ver:") => {
         Some(Callback::DownloadVersion(data[7..].to_string()))
+      }
+      _ if data.starts_with("pay_amt:") => {
+        Some(Callback::PayCryptoAmount(data[8..].to_string()))
       }
       _ => None,
     }
@@ -160,38 +168,30 @@ pub async fn handle(
       }
     }
     Callback::Buy => {
-      let user = sv.user.by_id(bot.user_id).await.ok().flatten();
-      let balance = user.map(|u| u.balance).unwrap_or(0);
-      let balance_str = format_usdt(balance);
-
-      let text = format!(
-        "💳 <b>Purchase License</b>\n\n\
-        <b>Your Balance:</b> {}\n\n\
-        Select a payment method below.",
-        balance_str
-      );
-      bot.edit_with_keyboard(&text, payment_method_menu()).await?;
+      handle_buy_menu(&sv, &bot).await?;
     }
     Callback::PayCrypto => {
-      let text = "💳 <b>Pay with Crypto</b>\n\n\
-        You can deposit USDT (or other crypto) to your account balance using CryptoBot.\n\n\
-        <b>Pricing:</b>\n\
-        • 1 Month License: <b>10 USDT</b>\n\
-        • 3 Month License: <b>25 USDT</b>\n\n\
-        <b>To deposit funds:</b>\n\
-        Open @CryptoBot and send USDT to this app.\n\n\
-        <i>💡 If you have a referrer code (user ID), you can get a discount when purchasing!</i>\n\n\
-        Contact @y_a_c_s_p for help with deposits.";
+      handle_pay_crypto(&sv, &bot, &app).await?;
+    }
+    Callback::PayCryptoAmount(amount) => {
+      handle_pay_crypto_amount(&sv, &bot, &app, &amount).await?;
+    }
+    Callback::SetRef => {
+      let user = sv.user.by_id(bot.user_id).await.ok().flatten();
+      let current_ref = user.as_ref().and_then(|u| u.referred_by);
 
-      let kb = InlineKeyboardMarkup::new(vec![
-        vec![InlineKeyboardButton::url(
-          "Open CryptoBot",
-          Url::parse("https://t.me/CryptoBot").expect("invalid link"),
-        )],
-        vec![InlineKeyboardButton::callback("« Back", Callback::Buy.to_data())],
-      ]);
-
-      bot.edit_with_keyboard(text, kb).await?;
+      let text = format!(
+        "🔗 <b>Set Referral Code</b>\n\n\
+        A referral code is the User ID of someone who referred you.\n\
+        When you have a referral code, you get a discount on purchases!\n\n\
+        <b>Your current referral code:</b> {}\n\n\
+        <b>To set/change:</b> <code>/ref USER_ID</code>\n\
+        <b>To clear:</b> <code>/ref clear</code>",
+        current_ref
+          .map(|id| format!("<code>{}</code>", id))
+          .unwrap_or_else(|| "None".to_string())
+      );
+      bot.edit_with_keyboard(text, back_keyboard()).await?;
     }
     Callback::PayManual => {
       let text = "👤 <b>Manual Purchase</b>\n\n\
@@ -487,6 +487,234 @@ async fn handle_download_version(
           back_keyboard(),
         )
         .await?;
+    }
+  }
+
+  Ok(())
+}
+
+/// Price constants in USDT
+const MONTH_PRICE: f64 = 10.0;
+const QUARTER_PRICE: f64 = 25.0;
+
+async fn handle_buy_menu(
+  sv: &Services<'_>,
+  bot: &ReplyBot,
+) -> ResponseResult<()> {
+  let user = sv.user.by_id(bot.user_id).await.ok().flatten();
+  let balance = user.as_ref().map(|u| u.balance).unwrap_or(0);
+  let referred_by = user.as_ref().and_then(|u| u.referred_by);
+  let balance_str = format_usdt(balance);
+
+  // Get discount if user has a referrer
+  let discount_percent = if let Some(ref_id) = referred_by {
+    sv.referral.stats(ref_id).await.map(|s| s.discount_percent).unwrap_or(0)
+  } else {
+    0
+  };
+
+  let (month_price, quarter_price) = if discount_percent > 0 {
+    let month_discounted =
+      MONTH_PRICE * (100 - discount_percent) as f64 / 100.0;
+    let quarter_discounted =
+      QUARTER_PRICE * (100 - discount_percent) as f64 / 100.0;
+    (month_discounted, quarter_discounted)
+  } else {
+    (MONTH_PRICE, QUARTER_PRICE)
+  };
+
+  let mut text = format!(
+    "💳 <b>Purchase License</b>\n\n\
+    <b>Your Balance:</b> {}\n\n\
+    <b>Pricing:</b>\n",
+    balance_str
+  );
+
+  if discount_percent > 0 {
+    text.push_str(&format!(
+      "• 1 Month: <s>10.00</s> <b>{:.2} USDT</b> ({}% off)\n\
+       • 3 Months: <s>25.00</s> <b>{:.2} USDT</b> ({}% off)\n\n\
+       <i>🎉 Discount from referral code <code>{}</code></i>\n",
+      month_price,
+      discount_percent,
+      quarter_price,
+      discount_percent,
+      referred_by.unwrap()
+    ));
+  } else {
+    text.push_str(&format!(
+      "• 1 Month: <b>{:.2} USDT</b>\n\
+       • 3 Months: <b>{:.2} USDT</b>\n",
+      month_price, quarter_price
+    ));
+  }
+
+  text.push_str("\nSelect a payment method below.");
+
+  if referred_by.is_none() {
+    text.push_str("\n\n<i>💡 Tip: Set a referral code to get a discount!</i>");
+  }
+
+  let mut menu = payment_method_menu();
+  if referred_by.is_none() {
+    // Add set referral button if user doesn't have one
+    menu.inline_keyboard.insert(
+      0,
+      vec![InlineKeyboardButton::callback(
+        "🔗 Set Referral Code",
+        Callback::SetRef.to_data(),
+      )],
+    );
+  }
+
+  bot.edit_with_keyboard(&text, menu).await?;
+  Ok(())
+}
+
+async fn handle_pay_crypto(
+  sv: &Services<'_>,
+  bot: &ReplyBot,
+  app: &AppState,
+) -> ResponseResult<()> {
+  let user = sv.user.by_id(bot.user_id).await.ok().flatten();
+  let referred_by = user.as_ref().and_then(|u| u.referred_by);
+
+  // Get discount if user has a referrer
+  let discount_percent = if let Some(ref_id) = referred_by {
+    sv.referral.stats(ref_id).await.map(|s| s.discount_percent).unwrap_or(0)
+  } else {
+    0
+  };
+
+  let (month_price, quarter_price) = if discount_percent > 0 {
+    let month_discounted =
+      MONTH_PRICE * (100 - discount_percent) as f64 / 100.0;
+    let quarter_discounted =
+      QUARTER_PRICE * (100 - discount_percent) as f64 / 100.0;
+    (month_discounted, quarter_discounted)
+  } else {
+    (MONTH_PRICE, QUARTER_PRICE)
+  };
+
+  let has_cryptobot = app.cryptobot.is_some();
+
+  let mut text = format!(
+    "💳 <b>Pay with Crypto</b>\n\n\
+    Select the amount to deposit:\n\n\
+    • 1 Month License: <b>{:.2} USDT</b>\n\
+    • 3 Month License: <b>{:.2} USDT</b>\n",
+    month_price, quarter_price
+  );
+
+  if discount_percent > 0 {
+    text.push_str(&format!(
+      "\n<i>🎉 {}% discount applied from referral!</i>\n",
+      discount_percent
+    ));
+  }
+
+  if has_cryptobot {
+    text.push_str("\nClick a button below to generate a payment link:");
+  } else {
+    text.push_str(
+      "\n<i>⚠️ Automatic payments are being configured.\nPlease contact support for manual deposits.</i>",
+    );
+  }
+
+  let mut rows = Vec::new();
+
+  if has_cryptobot {
+    rows.push(vec![InlineKeyboardButton::callback(
+      format!("💵 Pay {:.2} USDT (1 Month)", month_price),
+      Callback::PayCryptoAmount(format!("{:.2}", month_price)).to_data(),
+    )]);
+    rows.push(vec![InlineKeyboardButton::callback(
+      format!("💵 Pay {:.2} USDT (3 Months)", quarter_price),
+      Callback::PayCryptoAmount(format!("{:.2}", quarter_price)).to_data(),
+    )]);
+  } else {
+    rows.push(vec![InlineKeyboardButton::url(
+      "📞 Contact Support",
+      Url::parse("https://t.me/y_a_c_s_p").expect("invalid url"),
+    )]);
+  }
+
+  rows.push(vec![InlineKeyboardButton::callback(
+    "« Back",
+    Callback::Buy.to_data(),
+  )]);
+
+  bot.edit_with_keyboard(text, InlineKeyboardMarkup::new(rows)).await?;
+  Ok(())
+}
+
+async fn handle_pay_crypto_amount(
+  sv: &Services<'_>,
+  bot: &ReplyBot,
+  app: &AppState,
+  amount: &str,
+) -> ResponseResult<()> {
+  let Some(cryptobot) = &app.cryptobot else {
+    bot
+      .edit_with_keyboard(
+        "❌ CryptoBot payments are not configured. Contact support.",
+        back_keyboard(),
+      )
+      .await?;
+    return Ok(());
+  };
+
+  let amount_usdt: f64 = match amount.parse() {
+    Ok(a) => a,
+    Err(_) => {
+      bot.edit_with_keyboard("❌ Invalid amount.", back_keyboard()).await?;
+      return Ok(());
+    }
+  };
+
+  let user = sv.user.by_id(bot.user_id).await.ok().flatten();
+  let referred_by = user.as_ref().and_then(|u| u.referred_by);
+
+  // Create invoice
+  match cryptobot
+    .create_deposit_invoice(bot.user_id, amount_usdt, referred_by)
+    .await
+  {
+    Ok(invoice) => {
+      let text = format!(
+        "💳 <b>Payment Invoice Created</b>\n\n\
+        <b>Amount:</b> {} USDT\n\n\
+        Click the button below to pay via CryptoBot.\n\
+        The invoice expires in 1 hour.\n\n\
+        <i>Your balance will be updated automatically after payment.</i>",
+        amount
+      );
+
+      let kb = InlineKeyboardMarkup::new(vec![
+        vec![InlineKeyboardButton::url(
+          "💵 Pay Now",
+          Url::parse(&invoice.bot_invoice_url).expect("invalid invoice url"),
+        )],
+        vec![InlineKeyboardButton::callback(
+          "« Back",
+          Callback::PayCrypto.to_data(),
+        )],
+      ]);
+
+      bot.edit_with_keyboard(text, kb).await?;
+    }
+    Err(e) => {
+      let text = format!(
+        "❌ Failed to create invoice: {}\n\n\
+        Please try again or contact support.",
+        e.user_message()
+      );
+      let kb =
+        InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
+          "« Back",
+          Callback::PayCrypto.to_data(),
+        )]]);
+      bot.edit_with_keyboard(text, kb).await?;
     }
   }
 
