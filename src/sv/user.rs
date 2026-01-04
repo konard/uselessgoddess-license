@@ -54,6 +54,9 @@ impl<'a> User<'a> {
   }
 
   /// Set the referrer for a user (using referrer's user_id)
+  /// Anyone can set any existing user as their referrer
+  /// Discount is applied based on the referrer's discount_percent
+  /// Commission is only earned if the referrer is a creator/admin
   pub async fn set_referred_by(
     &self,
     tg_user_id: i64,
@@ -71,16 +74,11 @@ impl<'a> User<'a> {
         return Err(Error::InvalidArgs("Cannot refer yourself".into()));
       }
 
-      // Validate the referrer exists and is a creator/admin
-      let referrer = user::Entity::find_by_id(ref_id)
+      // Validate the referrer exists (any user can be a referrer)
+      let _referrer = user::Entity::find_by_id(ref_id)
         .one(self.db)
         .await?
         .ok_or(Error::ReferralNotFound)?;
-
-      if referrer.role != UserRole::Creator && referrer.role != UserRole::Admin
-      {
-        return Err(Error::ReferralInactive);
-      }
     }
 
     user::ActiveModel { referred_by: Set(referrer_id), ..user.into() }

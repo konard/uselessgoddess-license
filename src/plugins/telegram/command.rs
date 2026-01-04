@@ -83,6 +83,7 @@ pub enum Command {
   Help,
   Link(String),
   Ref(String),
+  Fund(String),
   Users,
   #[command(parse_with = parse_buy)]
   Buy {
@@ -214,19 +215,31 @@ pub async fn handle(
             {
               Ok(_) => {
                 // Get discount info
-                let discount = sv
-                  .referral
-                  .stats(referrer_id)
-                  .await
-                  .map(|s| s.discount_percent)
-                  .unwrap_or(0);
-                bot
-                  .reply_html(format!(
+                let stats = sv.referral.stats(referrer_id).await.ok();
+                let (discount, is_creator) = stats
+                  .map(|s| (s.discount_percent, s.is_active))
+                  .unwrap_or((0, false));
+
+                let text = if is_creator && discount > 0 {
+                  format!(
                     "✅ Referral code set to <code>{}</code>\n\
                     You will receive a {}% discount on purchases!",
                     referrer_id, discount
-                  ))
-                  .await?;
+                  )
+                } else if is_creator {
+                  format!(
+                    "✅ Referral code set to <code>{}</code>\n\
+                    This is a verified creator.",
+                    referrer_id
+                  )
+                } else {
+                  format!(
+                    "✅ Referral code set to <code>{}</code>\n\
+                    <i>Note: This user is not a verified creator, so no discount is available.</i>",
+                    referrer_id
+                  )
+                };
+                bot.reply_html(text).await?;
               }
               Err(e) => {
                 bot.reply_html(format!("❌ {}", e.user_message())).await?;
@@ -240,6 +253,54 @@ pub async fn handle(
               )
               .await?;
           }
+        }
+      }
+      return Ok(());
+    }
+    Command::Fund(amount_str) => {
+      let amount_str = amount_str.trim();
+      if amount_str.is_empty() {
+        bot.reply_html("Usage: /fund AMOUNT\nExample: /fund 10.5").await?;
+        return Ok(());
+      }
+
+      let amount_usdt: f64 = match amount_str.parse() {
+        Ok(a) => a,
+        Err(_) => {
+          bot.reply_html("❌ Invalid amount. Use: /fund AMOUNT\nExample: /fund 10.5").await?;
+          return Ok(());
+        }
+      };
+
+      if amount_usdt < 1.0 {
+        bot.reply_html("❌ Minimum deposit is 1 USDT.").await?;
+        return Ok(());
+      }
+
+      let Some(cryptobot) = &app.cryptobot else {
+        bot.reply_html("❌ Payment system is not configured. Contact support.").await?;
+        return Ok(());
+      };
+
+      let user = sv.user.by_id(bot.user_id).await.ok().flatten();
+      let referred_by = user.as_ref().and_then(|u| u.referred_by);
+
+      match cryptobot.create_deposit_invoice(bot.user_id, amount_usdt, referred_by).await {
+        Ok(invoice) => {
+          let _ = sv.payment.save_pending(invoice.invoice_id, bot.user_id, amount_usdt, referred_by).await;
+
+          let text = format!(
+            "💵 <b>Payment Invoice Created</b>\n\n\
+            <b>Amount:</b> {} USDT\n\n\
+            <a href=\"{}\">Click here to pay via CryptoBot</a>\n\n\
+            <i>After payment, use /start and click \"Check Payments\".</i>",
+            amount_usdt,
+            invoice.bot_invoice_url
+          );
+          bot.reply_html(text).await?;
+        }
+        Err(e) => {
+          bot.reply_html(format!("❌ Failed to create invoice: {}", e.user_message())).await?;
         }
       }
       return Ok(());

@@ -21,7 +21,8 @@ impl<'a> Referral<'a> {
   }
 
   /// Validate a referrer by their user ID
-  /// Returns the referrer if they are a valid creator/admin with referral enabled
+  /// Returns the referrer if they exist (any user can be a referrer)
+  /// Only creators/admins earn commission, but anyone can give discounts
   pub async fn validate_referrer(
     &self,
     referrer_id: i64,
@@ -31,16 +32,11 @@ impl<'a> Referral<'a> {
       .await?
       .ok_or(Error::ReferralNotFound)?;
 
-    // Only creators and admins can be referrers
-    if referrer.role != UserRole::Creator && referrer.role != UserRole::Admin {
-      return Err(Error::ReferralInactive);
-    }
-
     Ok(referrer)
   }
 
   /// Record a sale made through a referrer
-  /// Returns the commission amount in nanoUSDT
+  /// Returns the commission amount in nanoUSDT (0 if referrer is not a creator/admin)
   pub async fn record_sale(
     &self,
     referrer_id: i64,
@@ -53,8 +49,10 @@ impl<'a> Referral<'a> {
       .await?
       .ok_or(Error::ReferralNotFound)?;
 
+    // Only creators/admins earn commission, regular users don't
     if referrer.role != UserRole::Creator && referrer.role != UserRole::Admin {
-      return Err(Error::ReferralInactive);
+      txn.commit().await?;
+      return Ok(0);
     }
 
     let commission = (sale_amount * referrer.commission_rate as i64) / 100;
@@ -178,7 +176,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn test_regular_user_cannot_be_referrer() {
+  async fn test_regular_user_can_be_referrer_but_no_commission() {
     let db = test_db::setup().await;
 
     let now = Utc::now().naive_utc();
@@ -197,8 +195,20 @@ mod tests {
     .await
     .unwrap();
 
+    // Regular users can now be referrers (anyone can share their user_id)
     let result = Referral::new(&db).validate_referrer(12345).await;
-    assert!(result.is_err());
+    assert!(result.is_ok());
+
+    // But they don't earn commission from sales
+    let commission =
+      Referral::new(&db).record_sale(12345, MONTH_PRICE).await.unwrap();
+    assert_eq!(commission, 0); // No commission for regular users
+
+    // Verify no earnings were recorded
+    let user =
+      user::Entity::find_by_id(12345i64).one(&db).await.unwrap().unwrap();
+    assert_eq!(user.referral_sales, 0);
+    assert_eq!(user.referral_earnings, 0);
   }
 
   #[tokio::test]

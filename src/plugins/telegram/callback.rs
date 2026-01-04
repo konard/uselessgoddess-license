@@ -23,8 +23,10 @@ pub enum Callback {
   Download,
   DownloadVersion(String),
   Buy,
-  PayCrypto,
+  BuyPlan(String),
+  AddFunds,
   PayCryptoAmount(String),
+  PayCustomAmount,
   CheckPayments,
   PayManual,
   HaveLicense,
@@ -41,8 +43,10 @@ impl Callback {
       Callback::Download => "download".to_string(),
       Callback::DownloadVersion(v) => format!("dl_ver:{}", v),
       Callback::Buy => "buy".to_string(),
-      Callback::PayCrypto => "pay_crypto".to_string(),
+      Callback::BuyPlan(plan) => format!("buy_plan:{}", plan),
+      Callback::AddFunds => "add_funds".to_string(),
       Callback::PayCryptoAmount(a) => format!("pay_amt:{}", a),
+      Callback::PayCustomAmount => "pay_custom".to_string(),
       Callback::CheckPayments => "check_pay".to_string(),
       Callback::PayManual => "pay_man".to_string(),
       Callback::HaveLicense => "have_lic".to_string(),
@@ -58,7 +62,8 @@ impl Callback {
       "trial" => Some(Callback::Trial),
       "download" => Some(Callback::Download),
       "buy" => Some(Callback::Buy),
-      "pay_crypto" => Some(Callback::PayCrypto),
+      "add_funds" => Some(Callback::AddFunds),
+      "pay_custom" => Some(Callback::PayCustomAmount),
       "check_pay" => Some(Callback::CheckPayments),
       "pay_man" => Some(Callback::PayManual),
       "have_lic" => Some(Callback::HaveLicense),
@@ -69,6 +74,9 @@ impl Callback {
       }
       _ if data.starts_with("pay_amt:") => {
         Some(Callback::PayCryptoAmount(data[8..].to_string()))
+      }
+      _ if data.starts_with("buy_plan:") => {
+        Some(Callback::BuyPlan(data[9..].to_string()))
       }
       _ => None,
     }
@@ -85,10 +93,10 @@ pub fn main_menu(is_promo: bool) -> InlineKeyboardMarkup {
       "🔑 My License",
       Callback::License.to_data(),
     )],
-    vec![InlineKeyboardButton::callback(
-      "💳 Buy License",
-      Callback::Buy.to_data(),
-    )],
+    vec![
+      InlineKeyboardButton::callback("💳 Buy License", Callback::Buy.to_data()),
+      InlineKeyboardButton::callback("💵 Add Funds", Callback::AddFunds.to_data()),
+    ],
     vec![InlineKeyboardButton::callback(
       "📥 Download Panel",
       Callback::Download.to_data(),
@@ -103,27 +111,6 @@ pub fn main_menu(is_promo: bool) -> InlineKeyboardMarkup {
   }
 
   InlineKeyboardMarkup::new(rows)
-}
-
-fn payment_method_menu() -> InlineKeyboardMarkup {
-  InlineKeyboardMarkup::new(vec![
-    vec![InlineKeyboardButton::callback(
-      "💳 Pay with Crypto",
-      Callback::PayCrypto.to_data(),
-    )],
-    vec![InlineKeyboardButton::callback(
-      "👤 Manual Purchase",
-      Callback::PayManual.to_data(),
-    )],
-    vec![InlineKeyboardButton::callback(
-      "🔑 I Have a License",
-      Callback::HaveLicense.to_data(),
-    )],
-    vec![InlineKeyboardButton::callback(
-      "« Back to Menu",
-      Callback::Back.to_data(),
-    )],
-  ])
 }
 
 fn back_keyboard() -> InlineKeyboardMarkup {
@@ -173,11 +160,25 @@ pub async fn handle(
     Callback::Buy => {
       handle_buy_menu(&sv, &bot).await?;
     }
-    Callback::PayCrypto => {
-      handle_pay_crypto(&sv, &bot, &app).await?;
+    Callback::BuyPlan(plan) => {
+      handle_buy_plan(&sv, &bot, &plan).await?;
+    }
+    Callback::AddFunds => {
+      handle_add_funds(&sv, &bot, &app).await?;
     }
     Callback::PayCryptoAmount(amount) => {
       handle_pay_crypto_amount(&sv, &bot, &app, &amount).await?;
+    }
+    Callback::PayCustomAmount => {
+      let text = "💵 <b>Custom Amount</b>\n\n\
+        To add a custom amount to your balance, use the command:\n\n\
+        <code>/fund AMOUNT</code>\n\n\
+        Examples:\n\
+        • <code>/fund 5</code> - Add 5 USDT\n\
+        • <code>/fund 15.5</code> - Add 15.5 USDT\n\n\
+        <i>Minimum deposit: 1 USDT</i>";
+
+      bot.edit_with_keyboard(text, back_keyboard()).await?;
     }
     Callback::CheckPayments => {
       handle_check_payments(&sv, &bot, &app).await?;
@@ -503,6 +504,10 @@ async fn handle_download_version(
 const MONTH_PRICE: f64 = 10.0;
 const QUARTER_PRICE: f64 = 25.0;
 
+/// Nano USDT price constants
+const MONTH_PRICE_NANO: i64 = 10 * NANO_USDT;
+const QUARTER_PRICE_NANO: i64 = 25 * NANO_USDT;
+
 async fn handle_buy_menu(
   sv: &Services<'_>,
   bot: &ReplyBot,
@@ -529,8 +534,14 @@ async fn handle_buy_menu(
     (MONTH_PRICE, QUARTER_PRICE)
   };
 
+  let month_nano = (month_price * NANO_USDT as f64) as i64;
+  let quarter_nano = (quarter_price * NANO_USDT as f64) as i64;
+
+  let can_buy_month = balance >= month_nano;
+  let can_buy_quarter = balance >= quarter_nano;
+
   let mut text = format!(
-    "💳 <b>Purchase License</b>\n\n\
+    "💳 <b>Buy License</b>\n\n\
     <b>Your Balance:</b> {}\n\n\
     <b>Pricing:</b>\n",
     balance_str
@@ -555,34 +566,199 @@ async fn handle_buy_menu(
     ));
   }
 
-  text.push_str("\nSelect a payment method below.");
+  if can_buy_month {
+    text.push_str("\n<i>Select a plan to purchase with your balance:</i>");
+  } else {
+    text.push_str(&format!(
+      "\n<i>💡 You need {} more to buy 1 month license.</i>",
+      format_usdt(month_nano - balance)
+    ));
+  }
 
   if referred_by.is_none() {
     text.push_str("\n\n<i>💡 Tip: Set a referral code to get a discount!</i>");
   }
 
-  let mut menu = payment_method_menu();
-  if referred_by.is_none() {
-    // Add set referral button if user doesn't have one
-    menu.inline_keyboard.insert(
-      0,
-      vec![InlineKeyboardButton::callback(
-        "🔗 Set Referral Code",
-        Callback::SetRef.to_data(),
-      )],
-    );
+  let mut rows = Vec::new();
+
+  // Buy buttons (only enabled if sufficient balance)
+  if can_buy_month {
+    rows.push(vec![InlineKeyboardButton::callback(
+      format!("📅 1 Month ({:.2} USDT)", month_price),
+      Callback::BuyPlan("month".to_string()).to_data(),
+    )]);
+  }
+  if can_buy_quarter {
+    rows.push(vec![InlineKeyboardButton::callback(
+      format!("📅 3 Months ({:.2} USDT)", quarter_price),
+      Callback::BuyPlan("quarter".to_string()).to_data(),
+    )]);
   }
 
-  bot.edit_with_keyboard(&text, menu).await?;
+  // Add funds button
+  rows.push(vec![InlineKeyboardButton::callback(
+    "💵 Add Funds",
+    Callback::AddFunds.to_data(),
+  )]);
+
+  if referred_by.is_none() {
+    rows.push(vec![InlineKeyboardButton::callback(
+      "🔗 Set Referral Code",
+      Callback::SetRef.to_data(),
+    )]);
+  }
+
+  // Other options
+  rows.push(vec![
+    InlineKeyboardButton::callback("👤 Manual", Callback::PayManual.to_data()),
+    InlineKeyboardButton::callback("🔑 Link Key", Callback::HaveLicense.to_data()),
+  ]);
+
+  rows.push(vec![InlineKeyboardButton::callback(
+    "« Back to Menu",
+    Callback::Back.to_data(),
+  )]);
+
+  bot.edit_with_keyboard(&text, InlineKeyboardMarkup::new(rows)).await?;
   Ok(())
 }
 
-async fn handle_pay_crypto(
+async fn handle_buy_plan(
+  sv: &Services<'_>,
+  bot: &ReplyBot,
+  plan: &str,
+) -> ResponseResult<()> {
+  let user = sv.user.by_id(bot.user_id).await.ok().flatten();
+  let balance = user.as_ref().map(|u| u.balance).unwrap_or(0);
+  let referred_by = user.as_ref().and_then(|u| u.referred_by);
+
+  // Get discount if user has a referrer
+  let discount_percent = if let Some(ref_id) = referred_by {
+    sv.referral.stats(ref_id).await.map(|s| s.discount_percent).unwrap_or(0)
+  } else {
+    0
+  };
+
+  let (price, days, plan_name) = match plan {
+    "month" => {
+      let price = if discount_percent > 0 {
+        MONTH_PRICE_NANO * (100 - discount_percent) as i64 / 100
+      } else {
+        MONTH_PRICE_NANO
+      };
+      (price, 30u64, "1 Month")
+    }
+    "quarter" => {
+      let price = if discount_percent > 0 {
+        QUARTER_PRICE_NANO * (100 - discount_percent) as i64 / 100
+      } else {
+        QUARTER_PRICE_NANO
+      };
+      (price, 90u64, "3 Months")
+    }
+    _ => {
+      bot.edit_with_keyboard("❌ Invalid plan.", back_keyboard()).await?;
+      return Ok(());
+    }
+  };
+
+  if balance < price {
+    let needed = price - balance;
+    let text = format!(
+      "❌ <b>Insufficient Balance</b>\n\n\
+      <b>Required:</b> {}\n\
+      <b>Your balance:</b> {}\n\
+      <b>Needed:</b> {}\n\n\
+      <i>Add funds to your balance to purchase this plan.</i>",
+      format_usdt(price),
+      format_usdt(balance),
+      format_usdt(needed)
+    );
+    let kb = InlineKeyboardMarkup::new(vec![
+      vec![InlineKeyboardButton::callback(
+        "💵 Add Funds",
+        Callback::AddFunds.to_data(),
+      )],
+      vec![InlineKeyboardButton::callback("« Back", Callback::Buy.to_data())],
+    ]);
+    bot.edit_with_keyboard(text, kb).await?;
+    return Ok(());
+  }
+
+  // Purchase the license
+  match sv
+    .balance
+    .spend(
+      bot.user_id,
+      price,
+      Some(format!("License purchase: {}", plan_name)),
+      referred_by,
+    )
+    .await
+  {
+    Ok(new_balance) => {
+      // If user was referred, process referral commission
+      if let Some(referrer_id) = referred_by {
+        let _ = sv.referral.record_sale(referrer_id, price).await;
+        // Add commission to referrer's balance
+        let referrer_user = sv.user.by_id(referrer_id).await.ok().flatten();
+        if let Some(referrer) = referrer_user {
+          let commission = price * referrer.commission_rate as i64 / 100;
+          let _ = sv.balance.add_referral_bonus(referrer_id, commission, bot.user_id).await;
+        }
+      }
+
+      // Generate license
+      match sv.license.create(bot.user_id, crate::entity::license::LicenseType::Pro, days).await {
+        Ok(license) => {
+          let text = format!(
+            "✅ <b>Purchase Successful!</b>\n\n\
+            <b>Plan:</b> {}\n\
+            <b>License Key:</b> <code>{}</code>\n\
+            <b>Expires:</b> {}\n\n\
+            <b>New Balance:</b> {}\n\n\
+            <i>You can now download the panel!</i>",
+            plan_name,
+            license.key,
+            crate::utils::format_date(license.expires_at),
+            format_usdt(new_balance)
+          );
+          let kb = InlineKeyboardMarkup::new(vec![
+            vec![InlineKeyboardButton::callback(
+              "📥 Download Panel",
+              Callback::Download.to_data(),
+            )],
+            vec![InlineKeyboardButton::callback(
+              "« Back to Menu",
+              Callback::Back.to_data(),
+            )],
+          ]);
+          bot.edit_with_keyboard(text, kb).await?;
+        }
+        Err(e) => {
+          // Refund on failure
+          let _ = sv.balance.deposit(bot.user_id, price, Some("Refund: license creation failed".into())).await;
+          let text = format!("❌ Failed to create license: {}", e.user_message());
+          bot.edit_with_keyboard(text, back_keyboard()).await?;
+        }
+      }
+    }
+    Err(e) => {
+      let text = format!("❌ Failed to process payment: {}", e.user_message());
+      bot.edit_with_keyboard(text, back_keyboard()).await?;
+    }
+  }
+
+  Ok(())
+}
+
+async fn handle_add_funds(
   sv: &Services<'_>,
   bot: &ReplyBot,
   app: &AppState,
 ) -> ResponseResult<()> {
   let user = sv.user.by_id(bot.user_id).await.ok().flatten();
+  let balance = user.as_ref().map(|u| u.balance).unwrap_or(0);
   let referred_by = user.as_ref().and_then(|u| u.referred_by);
 
   // Get discount if user has a referrer
@@ -604,41 +780,69 @@ async fn handle_pay_crypto(
 
   let has_cryptobot = app.cryptobot.is_some();
 
+  let pending = sv.payment.pending_by_user(bot.user_id).await.unwrap_or_default();
+  let pending_count = pending.len();
+
   let mut text = format!(
-    "💳 <b>Pay with Crypto</b>\n\n\
-    Select the amount to deposit:\n\n\
-    • 1 Month License: <b>{:.2} USDT</b>\n\
-    • 3 Month License: <b>{:.2} USDT</b>\n",
-    month_price, quarter_price
+    "💵 <b>Add Funds</b>\n\n\
+    <b>Your Balance:</b> {}\n\n\
+    <b>Quick amounts:</b>\n\
+    • {:.2} USDT (1 month license)\n\
+    • {:.2} USDT (3 month license)\n",
+    format_usdt(balance),
+    month_price,
+    quarter_price
   );
 
   if discount_percent > 0 {
     text.push_str(&format!(
-      "\n<i>🎉 {}% discount applied from referral!</i>\n",
+      "\n<i>🎉 {}% discount available from referral!</i>\n",
       discount_percent
     ));
   }
 
+  if pending_count > 0 {
+    text.push_str(&format!(
+      "\n<i>⏳ You have {} pending payment(s).</i>\n",
+      pending_count
+    ));
+  }
+
   if has_cryptobot {
-    text.push_str("\nClick a button below to generate a payment link:");
+    text.push_str("\n<i>Select an amount or use /fund AMOUNT for custom amounts.</i>");
   } else {
     text.push_str(
-      "\n<i>⚠️ Automatic payments are being configured.\nPlease contact support for manual deposits.</i>",
+      "\n<i>⚠️ Automatic payments are being configured.\nContact support for manual deposits.</i>",
     );
   }
 
   let mut rows = Vec::new();
 
   if has_cryptobot {
+    rows.push(vec![
+      InlineKeyboardButton::callback(
+        format!("{:.2} USDT", month_price),
+        Callback::PayCryptoAmount(format!("{:.2}", month_price)).to_data(),
+      ),
+      InlineKeyboardButton::callback(
+        format!("{:.2} USDT", quarter_price),
+        Callback::PayCryptoAmount(format!("{:.2}", quarter_price)).to_data(),
+      ),
+    ]);
     rows.push(vec![InlineKeyboardButton::callback(
-      format!("💵 Pay {:.2} USDT (1 Month)", month_price),
-      Callback::PayCryptoAmount(format!("{:.2}", month_price)).to_data(),
+      "💵 Custom Amount",
+      Callback::PayCustomAmount.to_data(),
     )]);
+  }
+
+  if pending_count > 0 {
     rows.push(vec![InlineKeyboardButton::callback(
-      format!("💵 Pay {:.2} USDT (3 Months)", quarter_price),
-      Callback::PayCryptoAmount(format!("{:.2}", quarter_price)).to_data(),
+      "🔄 Check Payments",
+      Callback::CheckPayments.to_data(),
     )]);
-  } else {
+  }
+
+  if !has_cryptobot {
     rows.push(vec![InlineKeyboardButton::url(
       "📞 Contact Support",
       Url::parse("https://t.me/y_a_c_s_p").expect("invalid url"),
@@ -646,8 +850,8 @@ async fn handle_pay_crypto(
   }
 
   rows.push(vec![InlineKeyboardButton::callback(
-    "« Back",
-    Callback::Buy.to_data(),
+    "« Back to Menu",
+    Callback::Back.to_data(),
   )]);
 
   bot.edit_with_keyboard(text, InlineKeyboardMarkup::new(rows)).await?;
@@ -713,7 +917,7 @@ async fn handle_pay_crypto_amount(
         )],
         vec![InlineKeyboardButton::callback(
           "« Back",
-          Callback::PayCrypto.to_data(),
+          Callback::AddFunds.to_data(),
         )],
       ]);
 
@@ -728,7 +932,7 @@ async fn handle_pay_crypto_amount(
       let kb =
         InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
           "« Back",
-          Callback::PayCrypto.to_data(),
+          Callback::AddFunds.to_data(),
         )]]);
       bot.edit_with_keyboard(text, kb).await?;
     }
@@ -806,8 +1010,8 @@ async fn handle_check_payments(
         )]);
       }
       rows.push(vec![InlineKeyboardButton::callback(
-        "💳 Create New Invoice",
-        Callback::PayCrypto.to_data(),
+        "💵 Add Funds",
+        Callback::AddFunds.to_data(),
       )]);
       rows.push(vec![InlineKeyboardButton::callback(
         "« Back to Menu",
