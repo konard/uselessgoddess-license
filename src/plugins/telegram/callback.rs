@@ -95,7 +95,10 @@ pub fn main_menu(is_promo: bool) -> InlineKeyboardMarkup {
     )],
     vec![
       InlineKeyboardButton::callback("💳 Buy License", Callback::Buy.to_data()),
-      InlineKeyboardButton::callback("💵 Add Funds", Callback::AddFunds.to_data()),
+      InlineKeyboardButton::callback(
+        "💵 Add Funds",
+        Callback::AddFunds.to_data(),
+      ),
     ],
     vec![InlineKeyboardButton::callback(
       "📥 Download Panel",
@@ -611,7 +614,10 @@ async fn handle_buy_menu(
   // Other options
   rows.push(vec![
     InlineKeyboardButton::callback("👤 Manual", Callback::PayManual.to_data()),
-    InlineKeyboardButton::callback("🔑 Link Key", Callback::HaveLicense.to_data()),
+    InlineKeyboardButton::callback(
+      "🔑 Link Key",
+      Callback::HaveLicense.to_data(),
+    ),
   ]);
 
   rows.push(vec![InlineKeyboardButton::callback(
@@ -704,12 +710,19 @@ async fn handle_buy_plan(
         let referrer_user = sv.user.by_id(referrer_id).await.ok().flatten();
         if let Some(referrer) = referrer_user {
           let commission = price * referrer.commission_rate as i64 / 100;
-          let _ = sv.balance.add_referral_bonus(referrer_id, commission, bot.user_id).await;
+          let _ = sv
+            .balance
+            .add_referral_bonus(referrer_id, commission, bot.user_id)
+            .await;
         }
       }
 
       // Generate license
-      match sv.license.create(bot.user_id, crate::entity::license::LicenseType::Pro, days).await {
+      match sv
+        .license
+        .create(bot.user_id, crate::entity::license::LicenseType::Pro, days)
+        .await
+      {
         Ok(license) => {
           let text = format!(
             "✅ <b>Purchase Successful!</b>\n\n\
@@ -737,8 +750,16 @@ async fn handle_buy_plan(
         }
         Err(e) => {
           // Refund on failure
-          let _ = sv.balance.deposit(bot.user_id, price, Some("Refund: license creation failed".into())).await;
-          let text = format!("❌ Failed to create license: {}", e.user_message());
+          let _ = sv
+            .balance
+            .deposit(
+              bot.user_id,
+              price,
+              Some("Refund: license creation failed".into()),
+            )
+            .await;
+          let text =
+            format!("❌ Failed to create license: {}", e.user_message());
           bot.edit_with_keyboard(text, back_keyboard()).await?;
         }
       }
@@ -780,7 +801,8 @@ async fn handle_add_funds(
 
   let has_cryptobot = app.cryptobot.is_some();
 
-  let pending = sv.payment.pending_by_user(bot.user_id).await.unwrap_or_default();
+  let pending =
+    sv.payment.pending_by_user(bot.user_id).await.unwrap_or_default();
   let pending_count = pending.len();
 
   let mut text = format!(
@@ -809,7 +831,9 @@ async fn handle_add_funds(
   }
 
   if has_cryptobot {
-    text.push_str("\n<i>Select an amount or use /fund AMOUNT for custom amounts.</i>");
+    text.push_str(
+      "\n<i>Select an amount or use /fund AMOUNT for custom amounts.</i>",
+    );
   } else {
     text.push_str(
       "\n<i>⚠️ Automatic payments are being configured.\nContact support for manual deposits.</i>",

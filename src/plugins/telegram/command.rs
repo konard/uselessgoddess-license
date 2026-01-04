@@ -267,7 +267,11 @@ pub async fn handle(
       let amount_usdt: f64 = match amount_str.parse() {
         Ok(a) => a,
         Err(_) => {
-          bot.reply_html("❌ Invalid amount. Use: /fund AMOUNT\nExample: /fund 10.5").await?;
+          bot
+            .reply_html(
+              "❌ Invalid amount. Use: /fund AMOUNT\nExample: /fund 10.5",
+            )
+            .await?;
           return Ok(());
         }
       };
@@ -278,29 +282,46 @@ pub async fn handle(
       }
 
       let Some(cryptobot) = &app.cryptobot else {
-        bot.reply_html("❌ Payment system is not configured. Contact support.").await?;
+        bot
+          .reply_html("❌ Payment system is not configured. Contact support.")
+          .await?;
         return Ok(());
       };
 
       let user = sv.user.by_id(bot.user_id).await.ok().flatten();
       let referred_by = user.as_ref().and_then(|u| u.referred_by);
 
-      match cryptobot.create_deposit_invoice(bot.user_id, amount_usdt, referred_by).await {
+      match cryptobot
+        .create_deposit_invoice(bot.user_id, amount_usdt, referred_by)
+        .await
+      {
         Ok(invoice) => {
-          let _ = sv.payment.save_pending(invoice.invoice_id, bot.user_id, amount_usdt, referred_by).await;
+          let _ = sv
+            .payment
+            .save_pending(
+              invoice.invoice_id,
+              bot.user_id,
+              amount_usdt,
+              referred_by,
+            )
+            .await;
 
           let text = format!(
             "💵 <b>Payment Invoice Created</b>\n\n\
             <b>Amount:</b> {} USDT\n\n\
             <a href=\"{}\">Click here to pay via CryptoBot</a>\n\n\
             <i>After payment, use /start and click \"Check Payments\".</i>",
-            amount_usdt,
-            invoice.bot_invoice_url
+            amount_usdt, invoice.bot_invoice_url
           );
           bot.reply_html(text).await?;
         }
         Err(e) => {
-          bot.reply_html(format!("❌ Failed to create invoice: {}", e.user_message())).await?;
+          bot
+            .reply_html(format!(
+              "❌ Failed to create invoice: {}",
+              e.user_message()
+            ))
+            .await?;
         }
       }
       return Ok(());
