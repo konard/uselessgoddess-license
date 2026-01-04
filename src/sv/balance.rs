@@ -51,7 +51,7 @@ impl<'a> Balance<'a> {
       amount: Set(amount),
       tx_type: Set(TransactionType::Deposit),
       description: Set(description),
-      referral_code: Set(None),
+      referrer_id: Set(None),
       created_at: Set(now),
     }
     .insert(&txn)
@@ -66,7 +66,7 @@ impl<'a> Balance<'a> {
     user_id: i64,
     amount: i64,
     description: Option<String>,
-    referral_code: Option<String>,
+    referrer_id: Option<i64>,
   ) -> Result<i64> {
     if amount <= 0 {
       return Err(Error::InvalidArgs("Spend amount must be positive".into()));
@@ -96,7 +96,7 @@ impl<'a> Balance<'a> {
       amount: Set(-amount),
       tx_type: Set(TransactionType::Purchase),
       description: Set(description),
-      referral_code: Set(referral_code),
+      referrer_id: Set(referrer_id),
       created_at: Set(now),
     }
     .insert(&txn)
@@ -110,7 +110,7 @@ impl<'a> Balance<'a> {
     &self,
     user_id: i64,
     amount: i64,
-    referral_code: &str,
+    referrer_id: i64,
   ) -> Result<i64> {
     if amount <= 0 {
       return Err(Error::InvalidArgs("Bonus amount must be positive".into()));
@@ -136,52 +136,10 @@ impl<'a> Balance<'a> {
       amount: Set(amount),
       tx_type: Set(TransactionType::ReferralBonus),
       description: Set(Some(format!(
-        "Referral bonus from code {}",
-        referral_code
+        "Referral bonus from user {}",
+        referrer_id
       ))),
-      referral_code: Set(Some(referral_code.to_string())),
-      created_at: Set(now),
-    }
-    .insert(&txn)
-    .await?;
-
-    txn.commit().await?;
-    Ok(new_balance)
-  }
-
-  pub async fn add_cashback(
-    &self,
-    user_id: i64,
-    amount: i64,
-    description: Option<String>,
-  ) -> Result<i64> {
-    if amount <= 0 {
-      return Err(Error::InvalidArgs(
-        "Cashback amount must be positive".into(),
-      ));
-    }
-
-    let txn = self.db.begin().await?;
-
-    let user = user::Entity::find_by_id(user_id)
-      .one(&txn)
-      .await?
-      .ok_or(Error::UserNotFound)?;
-
-    let new_balance = user.balance + amount;
-
-    user::ActiveModel { balance: Set(new_balance), ..user.into() }
-      .update(&txn)
-      .await?;
-
-    let now = Utc::now().naive_utc();
-    transaction::ActiveModel {
-      id: NotSet,
-      user_id: Set(user_id),
-      amount: Set(amount),
-      tx_type: Set(TransactionType::Cashback),
-      description: Set(description),
-      referral_code: Set(None),
+      referrer_id: Set(Some(referrer_id)),
       created_at: Set(now),
     }
     .insert(&txn)
@@ -226,7 +184,7 @@ impl<'a> Balance<'a> {
       amount: Set(-amount),
       tx_type: Set(TransactionType::Withdrawal),
       description: Set(Some("Crypto withdrawal".to_string())),
-      referral_code: Set(None),
+      referrer_id: Set(None),
       created_at: Set(now),
     }
     .insert(&txn)
@@ -268,6 +226,10 @@ mod tests {
       balance: Set(0),
       role: Set(UserRole::User),
       referred_by: Set(None),
+      commission_rate: Set(25),
+      discount_percent: Set(3),
+      referral_sales: Set(0),
+      referral_earnings: Set(0),
     }
     .insert(&db)
     .await
@@ -292,6 +254,10 @@ mod tests {
       balance: Set(1000),
       role: Set(UserRole::User),
       referred_by: Set(None),
+      commission_rate: Set(25),
+      discount_percent: Set(3),
+      referral_sales: Set(0),
+      referral_earnings: Set(0),
     }
     .insert(&db)
     .await
@@ -316,6 +282,10 @@ mod tests {
       balance: Set(100),
       role: Set(UserRole::User),
       referred_by: Set(None),
+      commission_rate: Set(25),
+      discount_percent: Set(3),
+      referral_sales: Set(0),
+      referral_earnings: Set(0),
     }
     .insert(&db)
     .await
@@ -337,6 +307,10 @@ mod tests {
       balance: Set(1000),
       role: Set(UserRole::User),
       referred_by: Set(None),
+      commission_rate: Set(25),
+      discount_percent: Set(3),
+      referral_sales: Set(0),
+      referral_earnings: Set(0),
     }
     .insert(&db)
     .await
@@ -358,6 +332,10 @@ mod tests {
       balance: Set(1000),
       role: Set(UserRole::Creator),
       referred_by: Set(None),
+      commission_rate: Set(25),
+      discount_percent: Set(3),
+      referral_sales: Set(0),
+      referral_earnings: Set(0),
     }
     .insert(&db)
     .await

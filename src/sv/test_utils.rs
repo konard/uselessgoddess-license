@@ -25,10 +25,6 @@ pub mod test_db {
     let stmt = schema.create_table_from_entity(promo::Entity);
     db.execute(db.get_database_backend().build(&stmt)).await.unwrap();
 
-    // Create referral_code table
-    let stmt = schema.create_table_from_entity(referral_code::Entity);
-    db.execute(db.get_database_backend().build(&stmt)).await.unwrap();
-
     // Create transaction table
     let stmt = schema.create_table_from_entity(transaction::Entity);
     db.execute(db.get_database_backend().build(&stmt)).await.unwrap();

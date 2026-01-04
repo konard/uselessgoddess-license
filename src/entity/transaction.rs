@@ -14,8 +14,6 @@ pub enum TransactionType {
   Purchase,
   #[sea_orm(string_value = "referral_bonus")]
   ReferralBonus,
-  #[sea_orm(string_value = "cashback")]
-  Cashback,
   #[sea_orm(string_value = "withdrawal")]
   Withdrawal,
 }
@@ -29,7 +27,8 @@ pub struct Model {
   pub amount: i64,
   pub tx_type: TransactionType,
   pub description: Option<String>,
-  pub referral_code: Option<String>,
+  /// User ID of the referrer for this transaction (if applicable)
+  pub referrer_id: Option<i64>,
   pub created_at: DateTime,
 }
 

@@ -8,6 +8,8 @@ pub struct Migration;
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
   async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+    // Add balance, role, and referral fields to users table
+    // User ID is used directly as referral code
     manager
       .alter_table(
         Table::alter()
@@ -24,75 +26,38 @@ impl MigrationTrait for Migration {
               .not_null()
               .default("user"),
           )
-          .add_column(ColumnDef::new(UsersExt::ReferredBy).string().null())
-          .to_owned(),
-      )
-      .await?;
-
-    manager
-      .create_table(
-        Table::create()
-          .table(ReferralCodes::Table)
-          .if_not_exists()
-          .col(
-            ColumnDef::new(ReferralCodes::Code)
-              .string()
-              .not_null()
-              .primary_key(),
-          )
-          .col(ColumnDef::new(ReferralCodes::OwnerId).big_integer().not_null())
-          .col(
-            ColumnDef::new(ReferralCodes::CommissionRate)
+          // referred_by stores the user_id of the referrer (not a separate code)
+          .add_column(ColumnDef::new(UsersExt::ReferredBy).big_integer().null())
+          // Referral settings for this user as a referrer
+          .add_column(
+            ColumnDef::new(UsersExt::CommissionRate)
               .integer()
               .not_null()
               .default(25),
           )
-          .col(
-            ColumnDef::new(ReferralCodes::DiscountPercent)
+          .add_column(
+            ColumnDef::new(UsersExt::DiscountPercent)
               .integer()
               .not_null()
               .default(3),
           )
-          .col(
-            ColumnDef::new(ReferralCodes::TotalSales)
+          .add_column(
+            ColumnDef::new(UsersExt::ReferralSales)
               .integer()
               .not_null()
               .default(0),
           )
-          .col(
-            ColumnDef::new(ReferralCodes::TotalEarnings)
+          .add_column(
+            ColumnDef::new(UsersExt::ReferralEarnings)
               .big_integer()
               .not_null()
               .default(0),
           )
-          .col(
-            ColumnDef::new(ReferralCodes::IsActive)
-              .boolean()
-              .not_null()
-              .default(true),
-          )
-          .col(ColumnDef::new(ReferralCodes::CreatedAt).date_time().not_null())
-          .foreign_key(
-            ForeignKey::create()
-              .name("fk_referral_codes_owner")
-              .from(ReferralCodes::Table, ReferralCodes::OwnerId)
-              .to(Users::Table, Users::TgUserId)
-              .on_delete(ForeignKeyAction::Cascade),
-          )
           .to_owned(),
       )
       .await?;
 
-    manager
-      .create_index(
-        Index::create()
-          .name("idx_referral_codes_owner")
-          .table(ReferralCodes::Table)
-          .col(ReferralCodes::OwnerId)
-          .to_owned(),
-      )
-      .await?;
-
+    // Create transactions table for balance history
     manager
       .create_table(
         Table::create()
@@ -109,7 +74,8 @@ impl MigrationTrait for Migration {
           .col(ColumnDef::new(Transactions::Amount).big_integer().not_null())
           .col(ColumnDef::new(Transactions::TxType).string().not_null())
           .col(ColumnDef::new(Transactions::Description).string().null())
-          .col(ColumnDef::new(Transactions::ReferralCode).string().null())
+          // referrer_id stores who referred this purchase (user_id, not a code)
+          .col(ColumnDef::new(Transactions::ReferrerId).big_integer().null())
           .col(ColumnDef::new(Transactions::CreatedAt).date_time().not_null())
           .foreign_key(
             ForeignKey::create()
@@ -139,16 +105,16 @@ impl MigrationTrait for Migration {
       .await?;
 
     manager
-      .drop_table(Table::drop().table(ReferralCodes::Table).to_owned())
-      .await?;
-
-    manager
       .alter_table(
         Table::alter()
           .table(Users::Table)
           .drop_column(UsersExt::Balance)
           .drop_column(UsersExt::Role)
           .drop_column(UsersExt::ReferredBy)
+          .drop_column(UsersExt::CommissionRate)
+          .drop_column(UsersExt::DiscountPercent)
+          .drop_column(UsersExt::ReferralSales)
+          .drop_column(UsersExt::ReferralEarnings)
           .to_owned(),
       )
       .await
@@ -160,19 +126,10 @@ pub enum UsersExt {
   Balance,
   Role,
   ReferredBy,
-}
-
-#[derive(DeriveIden)]
-pub enum ReferralCodes {
-  Table,
-  Code,
-  OwnerId,
   CommissionRate,
   DiscountPercent,
-  TotalSales,
-  TotalEarnings,
-  IsActive,
-  CreatedAt,
+  ReferralSales,
+  ReferralEarnings,
 }
 
 #[derive(DeriveIden)]
@@ -183,6 +140,6 @@ pub enum Transactions {
   Amount,
   TxType,
   Description,
-  ReferralCode,
+  ReferrerId,
   CreatedAt,
 }

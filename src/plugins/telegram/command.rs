@@ -12,7 +12,7 @@ use crate::{
   entity::{license::LicenseType, user::UserRole},
   prelude::*,
   state::{AppState, Services},
-  sv::referral::CENTS_PER_DOLLAR,
+  sv::referral::NANO_USDT,
 };
 
 fn parse_publish(
@@ -59,6 +59,11 @@ fn parse_buy(
   Ok((key, duration))
 }
 
+/// Format balance in USDT (stored as nanoUSDT internally)
+fn format_usdt(nano_usdt: i64) -> String {
+  format!("{:.2} USDT", nano_usdt as f64 / NANO_USDT as f64)
+}
+
 #[derive(BotCommands, Clone)]
 #[command(rename_rule = "lowercase")]
 pub enum Command {
@@ -90,11 +95,10 @@ pub enum Command {
   Deactivate(String),
   GlobalStats,
   SetRole(String),
-  CreateRef(String),
-  Refs,
+  SetRef(String),
+  RefStats,
   Deposit(String),
   Withdraw(String),
-  RefStats,
 }
 
 const ADMIN_HELP: &str = "\
@@ -115,13 +119,12 @@ const ADMIN_HELP: &str = "\
 
 <b>Referral System:</b>
 /setrole &lt;user_id&gt; &lt;role&gt; - Set user role (user/creator/admin)
-/createref &lt;code&gt; [rate%] [discount%] - Create referral code
-/refs - List all referral codes
+/setref &lt;user_id&gt; [rate%] [discount%] - Configure referral settings
 /refstats - Show referral statistics
 
 <b>Balance Management:</b>
-/deposit &lt;user_id&gt; &lt;amount&gt; - Add balance (in cents)
-/withdraw &lt;user_id&gt; &lt;amount&gt; - Process withdrawal
+/deposit &lt;user_id&gt; &lt;amount_usdt&gt; - Add balance (e.g. 10.5)
+/withdraw &lt;user_id&gt; &lt;amount_usdt&gt; - Process withdrawal
 
 <b>System:</b>
 /users - List all registered users
@@ -237,9 +240,11 @@ async fn process_info_command(
       UserRole::Admin => "Admin",
     };
 
-    let balance_str =
-      format!("${:.2}", user.balance as f64 / CENTS_PER_DOLLAR as f64);
-    let referral_str = user.referred_by.as_deref().unwrap_or("None");
+    let balance_str = format_usdt(user.balance);
+    let referral_str = user
+      .referred_by
+      .map(|id| id.to_string())
+      .unwrap_or_else(|| "None".to_string());
 
     return Ok(format!(
       "👤 <b>User Info</b>\n\
@@ -618,88 +623,106 @@ async fn handle_admin_command(
       .await
     }
 
-    Command::CreateRef(args) => {
+    Command::SetRef(args) => {
       async {
         let parts: Vec<&str> = args.split_whitespace().collect();
-        // Default: 25% commission, 3% discount for buyers
-        let (code, rate, discount) = match parts.as_slice() {
-          [code] => (code.to_string(), 25, 3),
-          [code, rate_str] => {
-            let rate = rate_str.parse::<i32>().unwrap_or(25);
-            (code.to_string(), rate, 3)
+        // Configure referral settings for a user (user_id is their referral code)
+        let (user_id, rate, discount) = match parts.as_slice() {
+          [user_id_str] => {
+            let user_id = user_id_str
+              .parse::<i64>()
+              .map_err(|_| Error::InvalidArgs("Invalid user ID".into()))?;
+            (user_id, None, None)
           }
-          [code, rate_str, discount_str] => {
-            let rate = rate_str.parse::<i32>().unwrap_or(25);
-            let discount = discount_str.parse::<i32>().unwrap_or(3);
-            (code.to_string(), rate, discount)
+          [user_id_str, rate_str] => {
+            let user_id = user_id_str
+              .parse::<i64>()
+              .map_err(|_| Error::InvalidArgs("Invalid user ID".into()))?;
+            let rate = rate_str.parse::<i32>().ok();
+            (user_id, rate, None)
+          }
+          [user_id_str, rate_str, discount_str] => {
+            let user_id = user_id_str
+              .parse::<i64>()
+              .map_err(|_| Error::InvalidArgs("Invalid user ID".into()))?;
+            let rate = rate_str.parse::<i32>().ok();
+            let discount = discount_str.parse::<i32>().ok();
+            (user_id, rate, discount)
           }
           _ => {
             return Err(Error::InvalidArgs(
-              "Usage: /createref <code> [rate%] [discount%]".into(),
+              "Usage: /setref <user_id> [rate%] [discount%]".into(),
             ));
           }
         };
-        sv.referral
-          .create_code(bot.user_id, code.clone(), rate, discount)
-          .await?;
-        Ok(format!(
-          "✅ Referral code created!\n\
-          <b>Code:</b> <code>{}</code>\n\
-          <b>Commission:</b> {}%\n\
-          <b>Buyer discount:</b> {}%",
-          code, rate, discount
-        ))
-      }
-      .await
-    }
 
-    Command::Refs => {
-      async {
-        let refs = sv.referral.all().await?;
-        if refs.is_empty() {
-          Ok("📭 No referral codes found.".into())
-        } else {
-          let mut text = String::from("<b>📋 Referral Codes</b>\n\n");
-          for r in refs {
-            let status = if r.is_active { "✅" } else { "❌" };
-            let earnings = r.total_earnings as f64 / CENTS_PER_DOLLAR as f64;
-            text.push_str(&format!(
-              "{} <code>{}</code>\n\
-              Owner: <code>{}</code>\n\
-              Rate: {}% | Discount: {}%\n\
-              Sales: {} | Earned: ${:.2}\n\n",
-              status,
-              r.code,
-              r.owner_id,
-              r.commission_rate,
-              r.discount_percent,
-              r.total_sales,
-              earnings
-            ));
-          }
-          Ok(text)
+        // Update settings if provided
+        if let Some(r) = rate {
+          sv.referral.set_commission_rate(user_id, r).await?;
         }
+        if let Some(d) = discount {
+          sv.referral.set_discount_percent(user_id, d).await?;
+        }
+
+        let stats = sv.referral.stats(user_id).await?;
+        Ok(format!(
+          "✅ Referral settings for user {}\n\
+          <b>Referral code:</b> <code>{}</code>\n\
+          <b>Commission:</b> {}%\n\
+          <b>Customer discount:</b> {}%\n\
+          <b>Status:</b> {}",
+          user_id,
+          user_id,
+          stats.commission_rate,
+          stats.discount_percent,
+          if stats.is_active {
+            "Active (creator/admin)"
+          } else {
+            "Inactive (regular user)"
+          }
+        ))
       }
       .await
     }
 
     Command::RefStats => {
       async {
-        let refs = sv.referral.all().await?;
-        let total_sales: i32 = refs.iter().map(|r| r.total_sales).sum();
-        let total_earnings: i64 = refs.iter().map(|r| r.total_earnings).sum();
-        let active_count = refs.iter().filter(|r| r.is_active).count();
+        let creators = sv.referral.all_creators().await?;
+        if creators.is_empty() {
+          return Ok("📭 No creators/admins with referral capability.".into());
+        }
 
-        Ok(format!(
-          "📊 <b>Referral Statistics</b>\n\n\
-          <b>Total codes:</b> {} ({} active)\n\
-          <b>Total sales:</b> {}\n\
-          <b>Total commissions:</b> ${:.2}",
-          refs.len(),
-          active_count,
+        let mut text = String::from("<b>📊 Referral Statistics</b>\n\n");
+        let mut total_sales = 0;
+        let mut total_earnings = 0i64;
+
+        for user in &creators {
+          let earnings_str = format_usdt(user.referral_earnings);
+          text.push_str(&format!(
+            "<code>{}</code>\n\
+            Rate: {}% | Discount: {}%\n\
+            Sales: {} | Earned: {}\n\n",
+            user.tg_user_id,
+            user.commission_rate,
+            user.discount_percent,
+            user.referral_sales,
+            earnings_str
+          ));
+          total_sales += user.referral_sales;
+          total_earnings += user.referral_earnings;
+        }
+
+        text.push_str(&format!(
+          "<b>Total:</b>\n\
+          Creators: {}\n\
+          Sales: {}\n\
+          Commissions: {}",
+          creators.len(),
           total_sales,
-          total_earnings as f64 / CENTS_PER_DOLLAR as f64
-        ))
+          format_usdt(total_earnings)
+        ));
+
+        Ok(text)
       }
       .await
     }
@@ -712,23 +735,30 @@ async fn handle_admin_command(
             let user_id = user_id_str
               .parse::<i64>()
               .map_err(|_| Error::InvalidArgs("Invalid user ID".into()))?;
-            let amount = amount_str
-              .parse::<i64>()
+            // Parse as USDT (e.g., "10.5" = 10.5 USDT)
+            let amount_usdt: f64 = amount_str
+              .parse()
               .map_err(|_| Error::InvalidArgs("Invalid amount".into()))?;
+            let amount_nano = (amount_usdt * NANO_USDT as f64) as i64;
+
+            if amount_nano <= 0 {
+              return Err(Error::InvalidArgs("Amount must be positive".into()));
+            }
+
             let new_balance = sv
               .balance
-              .deposit(user_id, amount, Some("Admin deposit".into()))
+              .deposit(user_id, amount_nano, Some("Admin deposit".into()))
               .await?;
             Ok(format!(
-              "✅ Deposited {} cents to user {}\n\
-              New balance: ${:.2}",
-              amount,
+              "✅ Deposited {} to user {}\n\
+              New balance: {}",
+              format_usdt(amount_nano),
               user_id,
-              new_balance as f64 / CENTS_PER_DOLLAR as f64
+              format_usdt(new_balance)
             ))
           }
           _ => Err(Error::InvalidArgs(
-            "Usage: /deposit <user_id> <amount_cents>".into(),
+            "Usage: /deposit <user_id> <amount_usdt>".into(),
           )),
         }
       }
@@ -743,20 +773,27 @@ async fn handle_admin_command(
             let user_id = user_id_str
               .parse::<i64>()
               .map_err(|_| Error::InvalidArgs("Invalid user ID".into()))?;
-            let amount = amount_str
-              .parse::<i64>()
+            // Parse as USDT (e.g., "10.5" = 10.5 USDT)
+            let amount_usdt: f64 = amount_str
+              .parse()
               .map_err(|_| Error::InvalidArgs("Invalid amount".into()))?;
-            let new_balance = sv.balance.withdraw(user_id, amount).await?;
+            let amount_nano = (amount_usdt * NANO_USDT as f64) as i64;
+
+            if amount_nano <= 0 {
+              return Err(Error::InvalidArgs("Amount must be positive".into()));
+            }
+
+            let new_balance = sv.balance.withdraw(user_id, amount_nano).await?;
             Ok(format!(
-              "✅ Withdrawal of {} cents processed for user {}\n\
-              New balance: ${:.2}",
-              amount,
+              "✅ Withdrawal of {} processed for user {}\n\
+              New balance: {}",
+              format_usdt(amount_nano),
               user_id,
-              new_balance as f64 / CENTS_PER_DOLLAR as f64
+              format_usdt(new_balance)
             ))
           }
           _ => Err(Error::InvalidArgs(
-            "Usage: /withdraw <user_id> <amount_cents>".into(),
+            "Usage: /withdraw <user_id> <amount_usdt>".into(),
           )),
         }
       }

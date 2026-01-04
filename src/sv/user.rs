@@ -26,6 +26,10 @@ impl<'a> User<'a> {
       balance: Set(0),
       role: Set(UserRole::User),
       referred_by: Set(None),
+      commission_rate: Set(25),
+      discount_percent: Set(3),
+      referral_sales: Set(0),
+      referral_earnings: Set(0),
     };
 
     Ok(user.insert(self.db).await?)
@@ -49,11 +53,12 @@ impl<'a> User<'a> {
     Ok(())
   }
 
+  /// Set the referrer for a user (using referrer's user_id)
   #[allow(dead_code)]
   pub async fn set_referred_by(
     &self,
     tg_user_id: i64,
-    referral_code: &str,
+    referrer_id: i64,
   ) -> Result<()> {
     let user = user::Entity::find_by_id(tg_user_id)
       .one(self.db)
@@ -61,17 +66,17 @@ impl<'a> User<'a> {
       .ok_or(Error::UserNotFound)?;
 
     if user.referred_by.is_some() {
-      return Err(Error::InvalidArgs(
-        "User already has a referral code applied".into(),
-      ));
+      return Err(Error::InvalidArgs("User already has a referrer".into()));
     }
 
-    user::ActiveModel {
-      referred_by: Set(Some(referral_code.to_string())),
-      ..user.into()
+    // Cannot refer yourself
+    if tg_user_id == referrer_id {
+      return Err(Error::InvalidArgs("Cannot refer yourself".into()));
     }
-    .update(self.db)
-    .await?;
+
+    user::ActiveModel { referred_by: Set(Some(referrer_id)), ..user.into() }
+      .update(self.db)
+      .await?;
 
     Ok(())
   }

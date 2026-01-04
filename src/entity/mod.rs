@@ -3,7 +3,6 @@ pub mod free_game;
 pub mod free_item;
 pub mod license;
 pub mod promo;
-pub mod referral_code;
 pub mod stats;
 pub mod transaction;
 pub mod user;

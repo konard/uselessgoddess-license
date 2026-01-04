@@ -11,7 +11,7 @@ use crate::{
   entity::user::UserRole,
   prelude::*,
   state::{AppState, Services},
-  sv::referral::CENTS_PER_DOLLAR,
+  sv::referral::NANO_USDT,
 };
 
 /// Callback data enum - provides type-safe callback handling
@@ -25,7 +25,6 @@ pub enum Callback {
   Buy,
   PayManual,
   HaveLicense,
-  Balance,
   Back,
 }
 
@@ -40,7 +39,6 @@ impl Callback {
       Callback::Buy => "buy".to_string(),
       Callback::PayManual => "pay_man".to_string(),
       Callback::HaveLicense => "have_lic".to_string(),
-      Callback::Balance => "balance".to_string(),
       Callback::Back => "back".to_string(),
     }
   }
@@ -54,7 +52,6 @@ impl Callback {
       "buy" => Some(Callback::Buy),
       "pay_man" => Some(Callback::PayManual),
       "have_lic" => Some(Callback::HaveLicense),
-      "balance" => Some(Callback::Balance),
       "back" => Some(Callback::Back),
       _ if data.starts_with("dl_ver:") => {
         Some(Callback::DownloadVersion(data[7..].to_string()))
@@ -118,6 +115,11 @@ fn back_keyboard() -> InlineKeyboardMarkup {
   )]])
 }
 
+/// Format balance in USDT (stored as nanoUSDT internally)
+fn format_usdt(nano_usdt: i64) -> String {
+  format!("{:.2} USDT", nano_usdt as f64 / NANO_USDT as f64)
+}
+
 pub async fn handle(
   app: Arc<AppState>,
   bot: ReplyBot,
@@ -153,8 +155,7 @@ pub async fn handle(
     Callback::Buy => {
       let user = sv.user.by_id(bot.user_id).await.ok().flatten();
       let balance = user.map(|u| u.balance).unwrap_or(0);
-      let balance_str =
-        format!("${:.2}", balance as f64 / CENTS_PER_DOLLAR as f64);
+      let balance_str = format_usdt(balance);
 
       let text = format!(
         "💳 <b>Purchase License</b>\n\n\
@@ -198,16 +199,13 @@ pub async fn handle(
         <b>To link a license:</b>\n\
         Send the command: <code>/link YOUR_LICENSE_KEY</code>\n\n\
         <b>Your User ID:</b> <code>{}</code>\n\n\
-        <i>Note: Use a referral code when purchasing to get a discount!</i>";
+        <i>Note: When purchasing, you can provide a referrer's user ID to get a discount!</i>";
       bot
         .edit_with_keyboard(
           text.replace("{}", &bot.user_id.to_string()),
           back_keyboard(),
         )
         .await?;
-    }
-    Callback::Balance => {
-      handle_balance_view(&sv, &bot).await?;
     }
   }
 
@@ -220,14 +218,17 @@ async fn handle_profile_view(
 ) -> ResponseResult<()> {
   let user = sv.user.by_id(bot.user_id).await.ok().flatten();
 
-  let (reg_date, balance, role) = match &user {
-    Some(u) => (utils::format_date(u.reg_date), u.balance, u.role.clone()),
-    None => ("Unknown".into(), 0, UserRole::User),
+  let (reg_date, balance, role, referral_stats) = match &user {
+    Some(u) => {
+      let stats = sv.referral.stats(bot.user_id).await.ok();
+      (utils::format_date(u.reg_date), u.balance, u.role.clone(), stats)
+    }
+    None => ("Unknown".into(), 0, UserRole::User, None),
   };
 
   let stats = sv.stats.display_stats(bot.user_id).await.ok();
 
-  let balance_str = format!("${:.2}", balance as f64 / CENTS_PER_DOLLAR as f64);
+  let balance_str = format_usdt(balance);
   let role_str = match role {
     UserRole::User => "User",
     UserRole::Creator => "Creator",
@@ -243,8 +244,26 @@ async fn handle_profile_view(
     bot.user_id, reg_date, balance_str, role_str
   );
 
+  // Show referral info for creators/admins
+  if let Some(ref_stats) = referral_stats {
+    if ref_stats.is_active {
+      text.push_str(&format!(
+        "\n\n<b>🔗 Referral Info:</b>\n\
+        Your referral code: <code>{}</code>\n\
+        Commission rate: {}%\n\
+        Customer discount: {}%\n\
+        Total sales: {}\n\
+        Total earnings: {}",
+        bot.user_id,
+        ref_stats.commission_rate,
+        ref_stats.discount_percent,
+        ref_stats.total_sales,
+        format_usdt(ref_stats.total_earnings)
+      ));
+    }
+  }
+
   if let Some(s) = stats {
-    // Базовая стата
     text.push_str(&format!(
       "\n\n<b>📊 Farming Stats:</b>\n\
         Weekly XP: {}\n\
@@ -442,79 +461,6 @@ async fn handle_download_version(
         .await?;
     }
   }
-
-  Ok(())
-}
-
-async fn handle_balance_view(
-  sv: &Services<'_>,
-  bot: &ReplyBot,
-) -> ResponseResult<()> {
-  let user = sv.user.by_id(bot.user_id).await.ok().flatten();
-
-  let (balance, role, referral_codes) = match user {
-    Some(u) => {
-      let codes = sv.referral.by_owner(bot.user_id).await.unwrap_or_default();
-      (u.balance, u.role, codes)
-    }
-    None => (0, UserRole::User, vec![]),
-  };
-
-  let balance_str = format!("${:.2}", balance as f64 / CENTS_PER_DOLLAR as f64);
-
-  let role_str = match role {
-    UserRole::User => "User",
-    UserRole::Creator => "Creator",
-    UserRole::Admin => "Admin",
-  };
-
-  let can_withdraw = role == UserRole::Creator || role == UserRole::Admin;
-
-  let mut text = format!(
-    "💰 <b>My Balance</b>\n\n\
-    <b>Balance:</b> {}\n\
-    <b>Role:</b> {}\n",
-    balance_str, role_str
-  );
-
-  if can_withdraw {
-    text.push_str("\n<i>💸 As a creator, you can withdraw your balance to crypto.\nContact @y_a_c_s_p to process withdrawal.</i>\n");
-  } else {
-    text.push_str(
-      "\n<i>💡 Your balance can be used for license purchases.</i>\n",
-    );
-  }
-
-  if !referral_codes.is_empty() {
-    text.push_str("\n<b>🔗 Your Referral Codes:</b>\n");
-    for code in referral_codes {
-      let status = if code.is_active { "✅" } else { "❌" };
-      let earnings = code.total_earnings as f64 / CENTS_PER_DOLLAR as f64;
-      text.push_str(&format!(
-        "{} <code>{}</code> - {}% rate, {} sales, ${:.2} earned\n",
-        status, code.code, code.commission_rate, code.total_sales, earnings
-      ));
-    }
-  }
-
-  let transactions =
-    sv.balance.transactions(bot.user_id, 5).await.unwrap_or_default();
-  if !transactions.is_empty() {
-    text.push_str("\n<b>📜 Recent Transactions:</b>\n");
-    for tx in transactions {
-      let sign = if tx.amount > 0 { "+" } else { "" };
-      let amount_str =
-        format!("{}${:.2}", sign, tx.amount as f64 / CENTS_PER_DOLLAR as f64);
-      text.push_str(&format!(
-        "{} {:?} - {}\n",
-        utils::format_date(tx.created_at),
-        tx.tx_type,
-        amount_str
-      ));
-    }
-  }
-
-  bot.edit_with_keyboard(text, back_keyboard()).await?;
 
   Ok(())
 }
