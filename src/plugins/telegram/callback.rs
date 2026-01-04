@@ -25,6 +25,7 @@ pub enum Callback {
   Buy,
   PayCrypto,
   PayCryptoAmount(String),
+  CheckPayments,
   PayManual,
   HaveLicense,
   SetRef,
@@ -42,6 +43,7 @@ impl Callback {
       Callback::Buy => "buy".to_string(),
       Callback::PayCrypto => "pay_crypto".to_string(),
       Callback::PayCryptoAmount(a) => format!("pay_amt:{}", a),
+      Callback::CheckPayments => "check_pay".to_string(),
       Callback::PayManual => "pay_man".to_string(),
       Callback::HaveLicense => "have_lic".to_string(),
       Callback::SetRef => "set_ref".to_string(),
@@ -57,6 +59,7 @@ impl Callback {
       "download" => Some(Callback::Download),
       "buy" => Some(Callback::Buy),
       "pay_crypto" => Some(Callback::PayCrypto),
+      "check_pay" => Some(Callback::CheckPayments),
       "pay_man" => Some(Callback::PayManual),
       "have_lic" => Some(Callback::HaveLicense),
       "set_ref" => Some(Callback::SetRef),
@@ -175,6 +178,9 @@ pub async fn handle(
     }
     Callback::PayCryptoAmount(amount) => {
       handle_pay_crypto_amount(&sv, &bot, &app, &amount).await?;
+    }
+    Callback::CheckPayments => {
+      handle_check_payments(&sv, &bot, &app).await?;
     }
     Callback::SetRef => {
       let user = sv.user.by_id(bot.user_id).await.ok().flatten();
@@ -681,12 +687,18 @@ async fn handle_pay_crypto_amount(
     .await
   {
     Ok(invoice) => {
+      // Save pending invoice for later polling
+      let _ = sv
+        .payment
+        .save_pending(invoice.invoice_id, bot.user_id, amount_usdt, referred_by)
+        .await;
+
       let text = format!(
         "💳 <b>Payment Invoice Created</b>\n\n\
         <b>Amount:</b> {} USDT\n\n\
         Click the button below to pay via CryptoBot.\n\
         The invoice expires in 1 hour.\n\n\
-        <i>Your balance will be updated automatically after payment.</i>",
+        <i>After payment, click \"Check Payments\" to update your balance.</i>",
         amount
       );
 
@@ -694,6 +706,10 @@ async fn handle_pay_crypto_amount(
         vec![InlineKeyboardButton::url(
           "💵 Pay Now",
           Url::parse(&invoice.bot_invoice_url).expect("invalid invoice url"),
+        )],
+        vec![InlineKeyboardButton::callback(
+          "🔄 Check Payments",
+          Callback::CheckPayments.to_data(),
         )],
         vec![InlineKeyboardButton::callback(
           "« Back",
@@ -715,6 +731,108 @@ async fn handle_pay_crypto_amount(
           Callback::PayCrypto.to_data(),
         )]]);
       bot.edit_with_keyboard(text, kb).await?;
+    }
+  }
+
+  Ok(())
+}
+
+async fn handle_check_payments(
+  sv: &Services<'_>,
+  bot: &ReplyBot,
+  app: &AppState,
+) -> ResponseResult<()> {
+  let Some(cryptobot) = &app.cryptobot else {
+    bot
+      .edit_with_keyboard(
+        "❌ Payment verification is not configured.",
+        back_keyboard(),
+      )
+      .await?;
+    return Ok(());
+  };
+
+  // Check for paid invoices and process them
+  match sv.payment.check_and_process(cryptobot, bot.user_id).await {
+    Ok(results) if !results.is_empty() => {
+      let total: i64 = results.iter().map(|r| r.amount_nano).sum();
+      let total_str = format_usdt(total);
+
+      let text = format!(
+        "✅ <b>Payment Received!</b>\n\n\
+        <b>{}</b> has been added to your balance.\n\n\
+        <i>Use your balance to purchase licenses in the Buy menu.</i>",
+        total_str
+      );
+
+      let kb = InlineKeyboardMarkup::new(vec![
+        vec![InlineKeyboardButton::callback(
+          "💳 Buy License",
+          Callback::Buy.to_data(),
+        )],
+        vec![InlineKeyboardButton::callback(
+          "« Back to Menu",
+          Callback::Back.to_data(),
+        )],
+      ]);
+
+      bot.edit_with_keyboard(text, kb).await?;
+    }
+    Ok(_) => {
+      // No paid invoices found
+      let pending =
+        sv.payment.pending_by_user(bot.user_id).await.unwrap_or_default();
+
+      let text = if pending.is_empty() {
+        "📭 <b>No Pending Payments</b>\n\n\
+        You have no pending invoices.\n\
+        Create a new invoice to add funds to your balance."
+          .to_string()
+      } else {
+        format!(
+          "⏳ <b>Waiting for Payment</b>\n\n\
+          You have {} pending invoice(s).\n\
+          Complete the payment in CryptoBot, then click \"Check Payments\" again.\n\n\
+          <i>Invoices expire after 1 hour.</i>",
+          pending.len()
+        )
+      };
+
+      let mut rows = Vec::new();
+      if !pending.is_empty() {
+        rows.push(vec![InlineKeyboardButton::callback(
+          "🔄 Check Payments",
+          Callback::CheckPayments.to_data(),
+        )]);
+      }
+      rows.push(vec![InlineKeyboardButton::callback(
+        "💳 Create New Invoice",
+        Callback::PayCrypto.to_data(),
+      )]);
+      rows.push(vec![InlineKeyboardButton::callback(
+        "« Back to Menu",
+        Callback::Back.to_data(),
+      )]);
+
+      bot.edit_with_keyboard(text, InlineKeyboardMarkup::new(rows)).await?;
+    }
+    Err(e) => {
+      let text = format!(
+        "❌ Failed to check payments: {}\n\n\
+        Please try again later.",
+        e.user_message()
+      );
+      bot
+        .edit_with_keyboard(
+          text,
+          InlineKeyboardMarkup::new(vec![vec![
+            InlineKeyboardButton::callback(
+              "🔄 Try Again",
+              Callback::CheckPayments.to_data(),
+            ),
+          ]]),
+        )
+        .await?;
     }
   }
 

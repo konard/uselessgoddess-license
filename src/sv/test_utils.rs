@@ -29,6 +29,10 @@ pub mod test_db {
     let stmt = schema.create_table_from_entity(transaction::Entity);
     db.execute(db.get_database_backend().build(&stmt)).await.unwrap();
 
+    // Create pending_invoice table
+    let stmt = schema.create_table_from_entity(pending_invoice::Entity);
+    db.execute(db.get_database_backend().build(&stmt)).await.unwrap();
+
     db
   }
 }

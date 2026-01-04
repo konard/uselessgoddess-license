@@ -70,6 +70,7 @@ pub struct Services<'a> {
   pub steam: sv::Steam<'a>,
   pub referral: sv::Referral<'a>,
   pub balance: sv::Balance<'a>,
+  pub payment: sv::Payment<'a>,
   pub cryptobot: Option<&'a sv::cryptobot::CryptoBot>,
 }
 
@@ -154,6 +155,7 @@ impl AppState {
       steam: sv::Steam::new(&self.db),
       referral: sv::Referral::new(&self.db),
       balance: sv::Balance::new(&self.db),
+      payment: sv::Payment::new(&self.db),
       cryptobot: self.cryptobot.as_ref(),
     }
   }

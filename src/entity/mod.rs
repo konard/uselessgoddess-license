@@ -2,6 +2,7 @@ pub mod build;
 pub mod free_game;
 pub mod free_item;
 pub mod license;
+pub mod pending_invoice;
 pub mod promo;
 pub mod stats;
 pub mod transaction;
