@@ -1,4 +1,4 @@
-use std::{path::Path, sync::Arc};
+use std::{path::Path, sync::Arc, time::Duration};
 
 use reqwest::Url;
 use teloxide::{
@@ -24,6 +24,9 @@ pub enum Callback {
   DownloadVersion(String),
   Buy,
   BuyPlan(String),
+  ExtendLicense,
+  ExtendLicenseKey(String),
+  ExtendPlan { key: String, plan: String },
   AddFunds,
   PayCryptoAmount(String),
   PayCustomAmount,
@@ -44,6 +47,11 @@ impl Callback {
       Callback::DownloadVersion(v) => format!("dl_ver:{}", v),
       Callback::Buy => "buy".to_string(),
       Callback::BuyPlan(plan) => format!("buy_plan:{}", plan),
+      Callback::ExtendLicense => "extend_lic".to_string(),
+      Callback::ExtendLicenseKey(key) => format!("ext_key:{}", key),
+      Callback::ExtendPlan { key, plan } => {
+        format!("ext_plan:{}:{}", key, plan)
+      }
       Callback::AddFunds => "add_funds".to_string(),
       Callback::PayCryptoAmount(a) => format!("pay_amt:{}", a),
       Callback::PayCustomAmount => "pay_custom".to_string(),
@@ -62,6 +70,7 @@ impl Callback {
       "trial" => Some(Callback::Trial),
       "download" => Some(Callback::Download),
       "buy" => Some(Callback::Buy),
+      "extend_lic" => Some(Callback::ExtendLicense),
       "add_funds" => Some(Callback::AddFunds),
       "pay_custom" => Some(Callback::PayCustomAmount),
       "check_pay" => Some(Callback::CheckPayments),
@@ -77,6 +86,20 @@ impl Callback {
       }
       _ if data.starts_with("buy_plan:") => {
         Some(Callback::BuyPlan(data[9..].to_string()))
+      }
+      _ if data.starts_with("ext_key:") => {
+        Some(Callback::ExtendLicenseKey(data[8..].to_string()))
+      }
+      _ if data.starts_with("ext_plan:") => {
+        let parts: Vec<&str> = data[9..].splitn(2, ':').collect();
+        if parts.len() == 2 {
+          Some(Callback::ExtendPlan {
+            key: parts[0].to_string(),
+            plan: parts[1].to_string(),
+          })
+        } else {
+          None
+        }
       }
       _ => None,
     }
@@ -165,6 +188,15 @@ pub async fn handle(
     }
     Callback::BuyPlan(plan) => {
       handle_buy_plan(&sv, &bot, &plan).await?;
+    }
+    Callback::ExtendLicense => {
+      handle_extend_license_menu(&sv, &bot).await?;
+    }
+    Callback::ExtendLicenseKey(key) => {
+      handle_extend_license_key(&sv, &bot, &key).await?;
+    }
+    Callback::ExtendPlan { key, plan } => {
+      handle_extend_plan(&sv, &bot, &key, &plan).await?;
     }
     Callback::AddFunds => {
       handle_add_funds(&sv, &bot, &app).await?;
@@ -597,6 +629,12 @@ async fn handle_buy_menu(
       Callback::BuyPlan("quarter".to_string()).to_data(),
     )]);
   }
+
+  // Extend existing license button
+  rows.push(vec![InlineKeyboardButton::callback(
+    "🔄 Extend License",
+    Callback::ExtendLicense.to_data(),
+  )]);
 
   // Add funds button
   rows.push(vec![InlineKeyboardButton::callback(
@@ -1061,6 +1099,327 @@ async fn handle_check_payments(
           ]]),
         )
         .await?;
+    }
+  }
+
+  Ok(())
+}
+
+async fn handle_extend_license_menu(
+  sv: &Services<'_>,
+  bot: &ReplyBot,
+) -> ResponseResult<()> {
+  let licenses =
+    sv.license.by_user(bot.user_id, false).await.unwrap_or_default();
+
+  if licenses.is_empty() {
+    let text = "❌ <b>No Licenses Found</b>\n\n\
+      You don't have any licenses to extend.\n\
+      Purchase a new license first.";
+    let kb = InlineKeyboardMarkup::new(vec![
+      vec![InlineKeyboardButton::callback(
+        "💳 Buy License",
+        Callback::Buy.to_data(),
+      )],
+      vec![InlineKeyboardButton::callback("« Back", Callback::Buy.to_data())],
+    ]);
+    bot.edit_with_keyboard(text, kb).await?;
+    return Ok(());
+  }
+
+  let user = sv.user.by_id(bot.user_id).await.ok().flatten();
+  let balance = user.as_ref().map(|u| u.balance).unwrap_or(0);
+  let now = Utc::now().naive_utc();
+
+  let mut text = format!(
+    "🔄 <b>Extend License</b>\n\n\
+    <b>Your Balance:</b> {}\n\n\
+    <b>Select a license to extend:</b>\n",
+    format_usdt(balance)
+  );
+
+  let mut rows = Vec::new();
+  for license in &licenses {
+    let status = if license.expires_at > now {
+      format!("⏳ {}", crate::utils::format_duration(license.expires_at - now))
+    } else {
+      "❌ Expired".into()
+    };
+
+    text.push_str(&format!(
+      "\n<code>{}</code>\n{}\n",
+      &license.key[..8],
+      status
+    ));
+
+    let btn_text = format!("🔑 {}...", &license.key[..8]);
+    rows.push(vec![InlineKeyboardButton::callback(
+      btn_text,
+      Callback::ExtendLicenseKey(license.key.clone()).to_data(),
+    )]);
+  }
+
+  rows.push(vec![InlineKeyboardButton::callback(
+    "« Back",
+    Callback::Buy.to_data(),
+  )]);
+
+  bot.edit_with_keyboard(text, InlineKeyboardMarkup::new(rows)).await?;
+  Ok(())
+}
+
+async fn handle_extend_license_key(
+  sv: &Services<'_>,
+  bot: &ReplyBot,
+  key: &str,
+) -> ResponseResult<()> {
+  let license = match sv.license.by_key(key).await {
+    Ok(Some(l)) if l.tg_user_id == bot.user_id => l,
+    _ => {
+      bot.edit_with_keyboard("❌ License not found.", back_keyboard()).await?;
+      return Ok(());
+    }
+  };
+
+  let user = sv.user.by_id(bot.user_id).await.ok().flatten();
+  let balance = user.as_ref().map(|u| u.balance).unwrap_or(0);
+  let referred_by = user.as_ref().and_then(|u| u.referred_by);
+  let now = Utc::now().naive_utc();
+
+  let discount_percent = if let Some(ref_id) = referred_by {
+    sv.referral.stats(ref_id).await.map(|s| s.discount_percent).unwrap_or(0)
+  } else {
+    0
+  };
+
+  let (month_price, quarter_price) = if discount_percent > 0 {
+    (
+      MONTH_PRICE * (100 - discount_percent) as f64 / 100.0,
+      QUARTER_PRICE * (100 - discount_percent) as f64 / 100.0,
+    )
+  } else {
+    (MONTH_PRICE, QUARTER_PRICE)
+  };
+
+  let month_nano = (month_price * NANO_USDT as f64) as i64;
+  let quarter_nano = (quarter_price * NANO_USDT as f64) as i64;
+
+  let status = if license.expires_at > now {
+    format!("⏳ {}", crate::utils::format_duration(license.expires_at - now))
+  } else {
+    "❌ Expired".into()
+  };
+
+  let mut text = format!(
+    "🔄 <b>Extend License</b>\n\n\
+    <b>License:</b> <code>{}</code>\n\
+    <b>Status:</b> {}\n\
+    <b>Expires:</b> {}\n\n\
+    <b>Your Balance:</b> {}\n\n\
+    <b>Extension Pricing:</b>\n",
+    license.key,
+    status,
+    crate::utils::format_date(license.expires_at),
+    format_usdt(balance)
+  );
+
+  if discount_percent > 0 {
+    text.push_str(&format!(
+      "• +1 Month: <s>10.00</s> <b>{:.2} USDT</b> ({}% off)\n\
+       • +3 Months: <s>25.00</s> <b>{:.2} USDT</b> ({}% off)\n",
+      month_price, discount_percent, quarter_price, discount_percent
+    ));
+  } else {
+    text.push_str(&format!(
+      "• +1 Month: <b>{:.2} USDT</b>\n\
+       • +3 Months: <b>{:.2} USDT</b>\n",
+      month_price, quarter_price
+    ));
+  }
+
+  let can_buy_month = balance >= month_nano;
+  let can_buy_quarter = balance >= quarter_nano;
+
+  if !can_buy_month {
+    text.push_str(&format!(
+      "\n<i>💡 You need {} more to extend by 1 month.</i>",
+      format_usdt(month_nano - balance)
+    ));
+  }
+
+  let mut rows = Vec::new();
+
+  if can_buy_month {
+    rows.push(vec![InlineKeyboardButton::callback(
+      format!("+1 Month ({:.2} USDT)", month_price),
+      Callback::ExtendPlan { key: key.to_string(), plan: "month".to_string() }
+        .to_data(),
+    )]);
+  }
+  if can_buy_quarter {
+    rows.push(vec![InlineKeyboardButton::callback(
+      format!("+3 Months ({:.2} USDT)", quarter_price),
+      Callback::ExtendPlan {
+        key: key.to_string(),
+        plan: "quarter".to_string(),
+      }
+      .to_data(),
+    )]);
+  }
+
+  rows.push(vec![InlineKeyboardButton::callback(
+    "💵 Add Funds",
+    Callback::AddFunds.to_data(),
+  )]);
+  rows.push(vec![InlineKeyboardButton::callback(
+    "« Back",
+    Callback::ExtendLicense.to_data(),
+  )]);
+
+  bot.edit_with_keyboard(text, InlineKeyboardMarkup::new(rows)).await?;
+  Ok(())
+}
+
+async fn handle_extend_plan(
+  sv: &Services<'_>,
+  bot: &ReplyBot,
+  key: &str,
+  plan: &str,
+) -> ResponseResult<()> {
+  let license = match sv.license.by_key(key).await {
+    Ok(Some(l)) if l.tg_user_id == bot.user_id => l,
+    _ => {
+      bot.edit_with_keyboard("❌ License not found.", back_keyboard()).await?;
+      return Ok(());
+    }
+  };
+
+  let user = sv.user.by_id(bot.user_id).await.ok().flatten();
+  let balance = user.as_ref().map(|u| u.balance).unwrap_or(0);
+  let referred_by = user.as_ref().and_then(|u| u.referred_by);
+
+  let discount_percent = if let Some(ref_id) = referred_by {
+    sv.referral.stats(ref_id).await.map(|s| s.discount_percent).unwrap_or(0)
+  } else {
+    0
+  };
+
+  let (price, days, plan_name) = match plan {
+    "month" => {
+      let price = if discount_percent > 0 {
+        MONTH_PRICE_NANO * (100 - discount_percent) as i64 / 100
+      } else {
+        MONTH_PRICE_NANO
+      };
+      (price, 30u64, "1 Month")
+    }
+    "quarter" => {
+      let price = if discount_percent > 0 {
+        QUARTER_PRICE_NANO * (100 - discount_percent) as i64 / 100
+      } else {
+        QUARTER_PRICE_NANO
+      };
+      (price, 90u64, "3 Months")
+    }
+    _ => {
+      bot.edit_with_keyboard("❌ Invalid plan.", back_keyboard()).await?;
+      return Ok(());
+    }
+  };
+
+  if balance < price {
+    let needed = price - balance;
+    let text = format!(
+      "❌ <b>Insufficient Balance</b>\n\n\
+      <b>Required:</b> {}\n\
+      <b>Your balance:</b> {}\n\
+      <b>Needed:</b> {}\n\n\
+      <i>Add funds to your balance to extend this license.</i>",
+      format_usdt(price),
+      format_usdt(balance),
+      format_usdt(needed)
+    );
+    let kb = InlineKeyboardMarkup::new(vec![
+      vec![InlineKeyboardButton::callback(
+        "💵 Add Funds",
+        Callback::AddFunds.to_data(),
+      )],
+      vec![InlineKeyboardButton::callback(
+        "« Back",
+        Callback::ExtendLicenseKey(key.to_string()).to_data(),
+      )],
+    ]);
+    bot.edit_with_keyboard(text, kb).await?;
+    return Ok(());
+  }
+
+  match sv
+    .balance
+    .spend(
+      bot.user_id,
+      price,
+      Some(format!("License extension: {} for {}", plan_name, &key[..8])),
+      referred_by,
+    )
+    .await
+  {
+    Ok(new_balance) => {
+      if let Some(referrer_id) = referred_by {
+        let _ = sv.referral.record_sale(referrer_id, price).await;
+        let referrer_user = sv.user.by_id(referrer_id).await.ok().flatten();
+        if let Some(referrer) = referrer_user {
+          let commission = price * referrer.commission_rate as i64 / 100;
+          let _ = sv
+            .balance
+            .add_referral_bonus(referrer_id, commission, bot.user_id)
+            .await;
+        }
+      }
+
+      let duration = Duration::from_secs(days * 24 * 60 * 60);
+      match sv.license.expires(key, duration).await {
+        Ok(new_exp) => {
+          let text = format!(
+            "✅ <b>License Extended!</b>\n\n\
+            <b>License:</b> <code>{}</code>\n\
+            <b>Added:</b> {}\n\
+            <b>New Expiry:</b> {}\n\n\
+            <b>New Balance:</b> {}",
+            license.key,
+            plan_name,
+            crate::utils::format_date(new_exp),
+            format_usdt(new_balance)
+          );
+          let kb = InlineKeyboardMarkup::new(vec![
+            vec![InlineKeyboardButton::callback(
+              "📥 Download Panel",
+              Callback::Download.to_data(),
+            )],
+            vec![InlineKeyboardButton::callback(
+              "« Back to Menu",
+              Callback::Back.to_data(),
+            )],
+          ]);
+          bot.edit_with_keyboard(text, kb).await?;
+        }
+        Err(e) => {
+          let _ = sv
+            .balance
+            .deposit(
+              bot.user_id,
+              price,
+              Some("Refund: license extension failed".into()),
+            )
+            .await;
+          let text =
+            format!("❌ Failed to extend license: {}", e.user_message());
+          bot.edit_with_keyboard(text, back_keyboard()).await?;
+        }
+      }
+    }
+    Err(e) => {
+      let text = format!("❌ Failed to process payment: {}", e.user_message());
+      bot.edit_with_keyboard(text, back_keyboard()).await?;
     }
   }
 

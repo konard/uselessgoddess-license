@@ -1,12 +1,3 @@
-//! CryptoBot API integration for payment processing
-//! API docs: https://help.send.tg/en/articles/10279948-crypto-pay-api
-//!
-//! This module provides a client for the CryptoBot API to handle
-//! cryptocurrency payments. The integration requires:
-//! 1. Setting up CRYPTOBOT_API_TOKEN environment variable
-//! 2. Configuring webhook endpoint to receive payment notifications
-//! 3. Using the CryptoBot service in the app state
-
 #![allow(dead_code)]
 
 use std::collections::HashMap;
@@ -15,9 +6,6 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
 use crate::prelude::*;
-
-// Re-import json crate with proper alias
-use json as serde_json;
 
 /// CryptoBot API base URLs
 pub const MAINNET_URL: &str = "https://pay.crypt.bot/api/";
@@ -302,7 +290,7 @@ impl CryptoBot {
     amount_usdt: f64,
     referrer_id: Option<i64>,
   ) -> Result<Invoice> {
-    let payload = serde_json::json!({
+    let payload = json::json!({
       "type": "deposit",
       "user_id": user_id,
       "referrer_id": referrer_id,
@@ -349,7 +337,7 @@ impl CryptoBot {
       price_usdt
     };
 
-    let payload = serde_json::json!({
+    let payload = json::json!({
       "type": "license_purchase",
       "user_id": user_id,
       "license_type": license_type,
@@ -391,7 +379,7 @@ impl CryptoBot {
 
   /// Parse webhook payload data
   pub fn parse_payload(payload: &str) -> Option<PaymentPayload> {
-    serde_json::from_str(payload).ok()
+    json::from_str(payload).ok()
   }
 
   /// Verify webhook signature
