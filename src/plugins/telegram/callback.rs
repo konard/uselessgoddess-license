@@ -8,8 +8,10 @@ use teloxide::{
 
 use super::ReplyBot;
 use crate::{
+  entity::user::UserRole,
   prelude::*,
   state::{AppState, Services},
+  sv::referral::CENTS_PER_DOLLAR,
 };
 
 /// Callback data enum - provides type-safe callback handling
@@ -22,11 +24,12 @@ pub enum Callback {
   DownloadVersion(String),
   Buy,
   PayManual,
+  HaveLicense,
+  Balance,
   Back,
 }
 
 impl Callback {
-  /// Serialize callback to string for Telegram API
   pub fn to_data(&self) -> String {
     match self {
       Callback::Profile => "profile".to_string(),
@@ -36,11 +39,12 @@ impl Callback {
       Callback::DownloadVersion(v) => format!("dl_ver:{}", v),
       Callback::Buy => "buy".to_string(),
       Callback::PayManual => "pay_man".to_string(),
+      Callback::HaveLicense => "have_lic".to_string(),
+      Callback::Balance => "balance".to_string(),
       Callback::Back => "back".to_string(),
     }
   }
 
-  /// Parse callback from string received from Telegram API
   pub fn from_data(data: &str) -> Option<Self> {
     match data {
       "profile" => Some(Callback::Profile),
@@ -49,6 +53,8 @@ impl Callback {
       "download" => Some(Callback::Download),
       "buy" => Some(Callback::Buy),
       "pay_man" => Some(Callback::PayManual),
+      "have_lic" => Some(Callback::HaveLicense),
+      "balance" => Some(Callback::Balance),
       "back" => Some(Callback::Back),
       _ if data.starts_with("dl_ver:") => {
         Some(Callback::DownloadVersion(data[7..].to_string()))
@@ -67,6 +73,10 @@ pub fn main_menu(is_promo: bool) -> InlineKeyboardMarkup {
     vec![InlineKeyboardButton::callback(
       "🔑 My License",
       Callback::License.to_data(),
+    )],
+    vec![InlineKeyboardButton::callback(
+      "💰 My Balance",
+      Callback::Balance.to_data(),
     )],
     vec![InlineKeyboardButton::callback(
       "💳 Buy License",
@@ -94,7 +104,10 @@ fn payment_method_menu() -> InlineKeyboardMarkup {
       "👤 Manual Purchase",
       Callback::PayManual.to_data(),
     )],
-    // vec![InlineKeyboardButton::callback("CryptoBot (Auto)", CB_PAY_CRYPTO)],
+    vec![InlineKeyboardButton::callback(
+      "🔑 I Have a License",
+      Callback::HaveLicense.to_data(),
+    )],
     vec![InlineKeyboardButton::callback(
       "« Back to Menu",
       Callback::Back.to_data(),
@@ -173,6 +186,25 @@ pub async fn handle(
     }
     Callback::DownloadVersion(version) => {
       handle_download_version(&sv, &bot, &app, &version).await?;
+    }
+    Callback::HaveLicense => {
+      let text = "🔑 <b>Enter Your License</b>\n\n\
+        If you already have a license key, you can link it to your account.\n\n\
+        <b>To link a license:</b>\n\
+        1. Contact support at @y_a_c_s_p\n\
+        2. Provide your license key and user ID\n\
+        3. Support will link the license to your account\n\n\
+        <b>Your User ID:</b> <code>{}</code>\n\n\
+        <i>Note: You can also provide a referral code when purchasing to get bonus days!</i>";
+      bot
+        .edit_with_keyboard(
+          text.replace("{}", &bot.user_id.to_string()),
+          back_keyboard(),
+        )
+        .await?;
+    }
+    Callback::Balance => {
+      handle_balance_view(&sv, &bot).await?;
     }
   }
 
@@ -398,6 +430,77 @@ async fn handle_download_version(
         .await?;
     }
   }
+
+  Ok(())
+}
+
+async fn handle_balance_view(
+  sv: &Services<'_>,
+  bot: &ReplyBot,
+) -> ResponseResult<()> {
+  let user = sv.user.by_id(bot.user_id).await.ok().flatten();
+
+  let (balance, role, referral_codes) = match user {
+    Some(u) => {
+      let codes = sv.referral.by_owner(bot.user_id).await.unwrap_or_default();
+      (u.balance, u.role, codes)
+    }
+    None => (0, UserRole::User, vec![]),
+  };
+
+  let balance_str = format!("${:.2}", balance as f64 / CENTS_PER_DOLLAR as f64);
+
+  let role_str = match role {
+    UserRole::User => "User",
+    UserRole::Creator => "Creator",
+    UserRole::Admin => "Admin",
+  };
+
+  let can_withdraw = role == UserRole::Creator || role == UserRole::Admin;
+
+  let mut text = format!(
+    "💰 <b>My Balance</b>\n\n\
+    <b>Balance:</b> {}\n\
+    <b>Role:</b> {}\n",
+    balance_str, role_str
+  );
+
+  if can_withdraw {
+    text.push_str("\n<i>💸 As a creator, you can withdraw your balance to crypto.\nContact @y_a_c_s_p to process withdrawal.</i>\n");
+  } else {
+    text.push_str("\n<i>💡 Your balance can be used for license purchases or cashback from referrals.</i>\n");
+  }
+
+  if !referral_codes.is_empty() {
+    text.push_str("\n<b>🔗 Your Referral Codes:</b>\n");
+    for code in referral_codes {
+      let status = if code.is_active { "✅" } else { "❌" };
+      let earnings = code.total_earnings as f64 / CENTS_PER_DOLLAR as f64;
+      text.push_str(&format!(
+        "{} <code>{}</code> - {}% rate, {} sales, ${:.2} earned\n",
+        status, code.code, code.commission_rate, code.total_sales, earnings
+      ));
+    }
+  }
+
+  let transactions =
+    sv.balance.transactions(bot.user_id, 5).await.unwrap_or_default();
+  if !transactions.is_empty() {
+    text.push_str("\n<b>📜 Recent Transactions:</b>\n");
+    for tx in transactions {
+      let sign = if tx.amount > 0 { "+" } else { "" };
+      let amount_str =
+        format!("{}${:.2}", sign, tx.amount as f64 / CENTS_PER_DOLLAR as f64);
+      text.push_str(&format!(
+        "{} {:?} - {}\n",
+        utils::format_date(tx.created_at),
+        tx.tx_type,
+        amount_str
+      ));
+    }
+  }
+
+  bot.edit_with_keyboard(text, back_keyboard()).await?;
 
   Ok(())
 }

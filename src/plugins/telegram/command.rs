@@ -9,9 +9,10 @@ use teloxide::{
 
 use super::ReplyBot;
 use crate::{
-  entity::license::LicenseType,
+  entity::{license::LicenseType, user::UserRole},
   prelude::*,
   state::{AppState, Services},
+  sv::referral::CENTS_PER_DOLLAR,
 };
 
 fn parse_publish(
@@ -62,7 +63,6 @@ fn parse_buy(
 #[command(rename_rule = "lowercase")]
 pub enum Command {
   Start,
-  // Admin commands below - users use button interface
   Help,
   Users,
   Gen(String),
@@ -83,15 +83,17 @@ pub enum Command {
     version: String,
     changelog: String,
   },
-  /// Yank (remove from downloads) a build version
   Yank(String),
-  /// Un-yank (reactivate) a previously yanked build
   Unyank(String),
-  /// Alias for /yank (deprecated)
   #[command(hide)]
   Deactivate(String),
-  /// Admin stats - show global XP/drops summary
   GlobalStats,
+  SetRole(String),
+  CreateRef(String),
+  Refs,
+  Deposit(String),
+  Withdraw(String),
+  RefStats,
 }
 
 const ADMIN_HELP: &str = "\
@@ -109,6 +111,16 @@ const ADMIN_HELP: &str = "\
 /publish &lt;file&gt; &lt;ver&gt; [log] - Publish new build
 /yank &lt;version&gt; - Remove build from downloads
 /unyank &lt;version&gt; - Reactivate yanked build
+
+<b>Referral System:</b>
+/setrole &lt;user_id&gt; &lt;role&gt; - Set user role (user/creator/admin)
+/createref &lt;code&gt; [rate] [days] - Create referral code
+/refs - List all referral codes
+/refstats - Show referral statistics
+
+<b>Balance Management:</b>
+/deposit &lt;user_id&gt; &lt;amount&gt; - Add balance (in cents)
+/withdraw &lt;user_id&gt; &lt;amount&gt; - Process withdrawal
 
 <b>System:</b>
 /users - List all registered users
@@ -201,11 +213,24 @@ async fn process_info_command(
       ));
     }
 
+    let role_str = match user.role {
+      UserRole::User => "User",
+      UserRole::Creator => "Creator",
+      UserRole::Admin => "Admin",
+    };
+
+    let balance_str =
+      format!("${:.2}", user.balance as f64 / CENTS_PER_DOLLAR as f64);
+    let referral_str = user.referred_by.as_deref().unwrap_or("None");
+
     return Ok(format!(
       "👤 <b>User Info</b>\n\
       ID: <code>{}</code>\n\
       Name: {}\n\
-      Registered: {}\n\n\
+      Registered: {}\n\
+      Role: {}\n\
+      Balance: {}\n\
+      Referred by: {}\n\n\
       📊 <b>Global Stats</b>\n\
       XP (Week/Total): {} / {}\n\
       Runtime: {:.1}h\n\
@@ -215,6 +240,9 @@ async fn process_info_command(
       user.tg_user_id,
       username,
       utils::format_date(user.reg_date),
+      role_str,
+      balance_str,
+      referral_str,
       stats.weekly_xp,
       stats.total_xp,
       stats.runtime_hours,
@@ -542,6 +570,179 @@ async fn handle_admin_command(
       app.sessions.iter().map(|kv| kv.value().len()).sum::<usize>(),
       app.sessions.len()
     )),
+
+    Command::SetRole(args) => {
+      async {
+        let parts: Vec<&str> = args.split_whitespace().collect();
+        match parts.as_slice() {
+          [user_id_str, role_str] => {
+            let user_id = user_id_str
+              .parse::<i64>()
+              .map_err(|_| Error::InvalidArgs("Invalid user ID".into()))?;
+            let role = match *role_str {
+              "user" => UserRole::User,
+              "creator" => UserRole::Creator,
+              "admin" => UserRole::Admin,
+              _ => {
+                return Err(Error::InvalidArgs(
+                  "Invalid role. Use: user, creator, admin".into(),
+                ));
+              }
+            };
+            sv.user.set_role(user_id, role.clone()).await?;
+            Ok(format!("✅ User {} role set to {:?}", user_id, role))
+          }
+          _ => {
+            Err(Error::InvalidArgs("Usage: /setrole <user_id> <role>".into()))
+          }
+        }
+      }
+      .await
+    }
+
+    Command::CreateRef(args) => {
+      async {
+        let parts: Vec<&str> = args.split_whitespace().collect();
+        let (code, rate, bonus_days) = match parts.as_slice() {
+          [code] => (code.to_string(), 25, 5),
+          [code, rate_str] => {
+            let rate = rate_str.parse::<i32>().unwrap_or(25);
+            (code.to_string(), rate, 5)
+          }
+          [code, rate_str, days_str] => {
+            let rate = rate_str.parse::<i32>().unwrap_or(25);
+            let days = days_str.parse::<i32>().unwrap_or(5);
+            (code.to_string(), rate, days)
+          }
+          _ => {
+            return Err(Error::InvalidArgs(
+              "Usage: /createref <code> [rate%] [bonus_days]".into(),
+            ));
+          }
+        };
+        sv.referral
+          .create_code(bot.user_id, code.clone(), rate, bonus_days)
+          .await?;
+        Ok(format!(
+          "✅ Referral code created!\n\
+          <b>Code:</b> <code>{}</code>\n\
+          <b>Commission:</b> {}%\n\
+          <b>Bonus days:</b> {}",
+          code, rate, bonus_days
+        ))
+      }
+      .await
+    }
+
+    Command::Refs => {
+      async {
+        let refs = sv.referral.all().await?;
+        if refs.is_empty() {
+          Ok("📭 No referral codes found.".into())
+        } else {
+          let mut text = String::from("<b>📋 Referral Codes</b>\n\n");
+          for r in refs {
+            let status = if r.is_active { "✅" } else { "❌" };
+            let earnings = r.total_earnings as f64 / CENTS_PER_DOLLAR as f64;
+            text.push_str(&format!(
+              "{} <code>{}</code>\n\
+              Owner: <code>{}</code>\n\
+              Rate: {}% | Bonus: {}d\n\
+              Sales: {} | Earned: ${:.2}\n\n",
+              status,
+              r.code,
+              r.owner_id,
+              r.commission_rate,
+              r.bonus_days,
+              r.total_sales,
+              earnings
+            ));
+          }
+          Ok(text)
+        }
+      }
+      .await
+    }
+
+    Command::RefStats => {
+      async {
+        let refs = sv.referral.all().await?;
+        let total_sales: i32 = refs.iter().map(|r| r.total_sales).sum();
+        let total_earnings: i64 = refs.iter().map(|r| r.total_earnings).sum();
+        let active_count = refs.iter().filter(|r| r.is_active).count();
+
+        Ok(format!(
+          "📊 <b>Referral Statistics</b>\n\n\
+          <b>Total codes:</b> {} ({} active)\n\
+          <b>Total sales:</b> {}\n\
+          <b>Total commissions:</b> ${:.2}",
+          refs.len(),
+          active_count,
+          total_sales,
+          total_earnings as f64 / CENTS_PER_DOLLAR as f64
+        ))
+      }
+      .await
+    }
+
+    Command::Deposit(args) => {
+      async {
+        let parts: Vec<&str> = args.split_whitespace().collect();
+        match parts.as_slice() {
+          [user_id_str, amount_str] => {
+            let user_id = user_id_str
+              .parse::<i64>()
+              .map_err(|_| Error::InvalidArgs("Invalid user ID".into()))?;
+            let amount = amount_str
+              .parse::<i64>()
+              .map_err(|_| Error::InvalidArgs("Invalid amount".into()))?;
+            let new_balance = sv
+              .balance
+              .deposit(user_id, amount, Some("Admin deposit".into()))
+              .await?;
+            Ok(format!(
+              "✅ Deposited {} cents to user {}\n\
+              New balance: ${:.2}",
+              amount,
+              user_id,
+              new_balance as f64 / CENTS_PER_DOLLAR as f64
+            ))
+          }
+          _ => Err(Error::InvalidArgs(
+            "Usage: /deposit <user_id> <amount_cents>".into(),
+          )),
+        }
+      }
+      .await
+    }
+
+    Command::Withdraw(args) => {
+      async {
+        let parts: Vec<&str> = args.split_whitespace().collect();
+        match parts.as_slice() {
+          [user_id_str, amount_str] => {
+            let user_id = user_id_str
+              .parse::<i64>()
+              .map_err(|_| Error::InvalidArgs("Invalid user ID".into()))?;
+            let amount = amount_str
+              .parse::<i64>()
+              .map_err(|_| Error::InvalidArgs("Invalid amount".into()))?;
+            let new_balance = sv.balance.withdraw(user_id, amount).await?;
+            Ok(format!(
+              "✅ Withdrawal of {} cents processed for user {}\n\
+              New balance: ${:.2}",
+              amount,
+              user_id,
+              new_balance as f64 / CENTS_PER_DOLLAR as f64
+            ))
+          }
+          _ => Err(Error::InvalidArgs(
+            "Usage: /withdraw <user_id> <amount_cents>".into(),
+          )),
+        }
+      }
+      .await
+    }
 
     _ => return Ok(()),
   };

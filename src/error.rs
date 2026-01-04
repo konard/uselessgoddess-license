@@ -30,6 +30,14 @@ pub enum Error {
   BuildInactive,
   #[error("Build already active")]
   BuildAlreadyActive,
+  #[error("Referral code not found")]
+  ReferralNotFound,
+  #[error("Referral code inactive")]
+  ReferralInactive,
+  #[error("Insufficient balance")]
+  InsufficientBalance,
+  #[error("Withdrawal not allowed for regular users")]
+  WithdrawalNotAllowed,
   #[error("Invalid arguments: {0}")]
   InvalidArgs(String),
   #[error("DB error: {0}")]
@@ -41,7 +49,6 @@ pub enum Error {
 }
 
 impl Error {
-  /// User-friendly error message for telegram bot responses
   pub fn user_message(&self) -> String {
     match self {
       Error::LicenseNotFound => "Key not found".into(),
@@ -55,6 +62,12 @@ impl Error {
       Error::BuildNotFound => "Build not found".into(),
       Error::BuildInactive => "Build is already yanked".into(),
       Error::BuildAlreadyActive => "Build is already active".into(),
+      Error::ReferralNotFound => "Referral code not found".into(),
+      Error::ReferralInactive => "Referral code is inactive".into(),
+      Error::InsufficientBalance => "Insufficient balance".into(),
+      Error::WithdrawalNotAllowed => {
+        "Only creators can withdraw to crypto".into()
+      }
       Error::InvalidArgs(msg) => msg.clone(),
       Error::Database(e) => format!("Database error: {}", e),
       Error::Io(e) => format!("IO error: {}", e),
@@ -87,6 +100,18 @@ impl IntoResponse for Error {
       Error::BuildInactive => (StatusCode::BAD_REQUEST, "Build already yanked"),
       Error::BuildAlreadyActive => {
         (StatusCode::BAD_REQUEST, "Build already active")
+      }
+      Error::ReferralNotFound => {
+        (StatusCode::NOT_FOUND, "Referral code not found")
+      }
+      Error::ReferralInactive => {
+        (StatusCode::BAD_REQUEST, "Referral code inactive")
+      }
+      Error::InsufficientBalance => {
+        (StatusCode::BAD_REQUEST, "Insufficient balance")
+      }
+      Error::WithdrawalNotAllowed => {
+        (StatusCode::FORBIDDEN, "Withdrawal not allowed")
       }
       Error::InvalidArgs(msg) => (StatusCode::BAD_REQUEST, msg.as_str()),
       Error::Io(_) => (StatusCode::INTERNAL_SERVER_ERROR, "IO error"),

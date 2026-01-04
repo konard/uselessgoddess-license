@@ -67,6 +67,8 @@ pub struct Services<'a> {
   pub build: sv::Build<'a>,
   pub license: sv::License<'a>,
   pub steam: sv::Steam<'a>,
+  pub referral: sv::Referral<'a>,
+  pub balance: sv::Balance<'a>,
 }
 
 pub struct AppState {
@@ -138,6 +140,8 @@ impl AppState {
       build: sv::Build::new(&self.db),
       license: sv::License::new(&self.db),
       steam: sv::Steam::new(&self.db),
+      referral: sv::Referral::new(&self.db),
+      balance: sv::Balance::new(&self.db),
     }
   }
 
