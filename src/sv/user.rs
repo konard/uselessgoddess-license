@@ -1,5 +1,5 @@
 use crate::{
-  entity::{license, user},
+  entity::{license, user, user::UserRole},
   prelude::*,
 };
 
@@ -20,8 +20,17 @@ impl<'a> User<'a> {
     }
 
     let now = Utc::now().naive_utc();
-    let user =
-      user::ActiveModel { tg_user_id: Set(tg_user_id), reg_date: Set(now) };
+    let user = user::ActiveModel {
+      tg_user_id: Set(tg_user_id),
+      reg_date: Set(now),
+      balance: Set(0),
+      role: Set(UserRole::User),
+      referred_by: Set(None),
+      commission_rate: Set(25),
+      discount_percent: Set(3),
+      referral_sales: Set(0),
+      referral_earnings: Set(0),
+    };
 
     Ok(user.insert(self.db).await?)
   }
@@ -29,6 +38,54 @@ impl<'a> User<'a> {
   pub async fn by_id(&self, tg_user_id: i64) -> Result<Option<user::Model>> {
     let user = user::Entity::find_by_id(tg_user_id).one(self.db).await?;
     Ok(user)
+  }
+
+  pub async fn set_role(&self, tg_user_id: i64, role: UserRole) -> Result<()> {
+    let user = user::Entity::find_by_id(tg_user_id)
+      .one(self.db)
+      .await?
+      .ok_or(Error::UserNotFound)?;
+
+    user::ActiveModel { role: Set(role), ..user.into() }
+      .update(self.db)
+      .await?;
+
+    Ok(())
+  }
+
+  /// Set the referrer for a user (using referrer's user_id)
+  /// Anyone can set any existing user as their referrer
+  /// Discount is applied based on the referrer's discount_percent
+  /// Commission is only earned if the referrer is a creator/admin
+  pub async fn set_referred_by(
+    &self,
+    tg_user_id: i64,
+    referrer_id: Option<i64>,
+  ) -> Result<()> {
+    let user = user::Entity::find_by_id(tg_user_id)
+      .one(self.db)
+      .await?
+      .ok_or(Error::UserNotFound)?;
+
+    // If setting a new referrer (not clearing)
+    if let Some(ref_id) = referrer_id {
+      // Cannot refer yourself
+      if tg_user_id == ref_id {
+        return Err(Error::InvalidArgs("Cannot refer yourself".into()));
+      }
+
+      // Validate the referrer exists (any user can be a referrer)
+      let _referrer = user::Entity::find_by_id(ref_id)
+        .one(self.db)
+        .await?
+        .ok_or(Error::ReferralNotFound)?;
+    }
+
+    user::ActiveModel { referred_by: Set(referrer_id), ..user.into() }
+      .update(self.db)
+      .await?;
+
+    Ok(())
   }
 
   #[allow(dead_code)]

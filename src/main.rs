@@ -116,8 +116,18 @@ async fn main() {
 
   let config = state::Config { base_url, ..Default::default() };
 
+  // Initialize CryptoBot client if API token is configured
+  let cryptobot = env::var("CRYPTOBOT_API_TOKEN").ok().map(|token| {
+    let use_testnet = env::var("CRYPTOBOT_TESTNET")
+      .map(|v| v == "true" || v == "1")
+      .unwrap_or(false);
+    info!("CryptoBot API enabled (testnet: {})", use_testnet);
+    sv::cryptobot::CryptoBot::new(token, use_testnet)
+  });
+
   let app_state = Arc::new(
-    AppState::with_config(&db_url, &token, admins, secret, config).await,
+    AppState::with_config(&db_url, &token, admins, secret, config, cryptobot)
+      .await,
   );
 
   App::new()

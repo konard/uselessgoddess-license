@@ -9,9 +9,10 @@ use teloxide::{
 
 use super::ReplyBot;
 use crate::{
-  entity::license::LicenseType,
+  entity::{license::LicenseType, user::UserRole},
   prelude::*,
   state::{AppState, Services},
+  sv::referral::NANO_USDT,
 };
 
 fn parse_publish(
@@ -33,42 +34,60 @@ fn parse_publish(
 
 fn parse_buy(
   input: String,
-) -> std::result::Result<(String, Duration), ParseError> {
-  let mut parts = input.splitn(2, ' ');
-  let key = parts.next().unwrap_or_default().to_string();
-  let duration_str = parts.next().unwrap_or_default().to_string();
+) -> std::result::Result<(Option<String>, Duration), ParseError> {
+  let parts: Vec<&str> = input.split_whitespace().collect();
 
-  if key.is_empty() || duration_str.is_empty() {
-    return Err(ParseError::IncorrectFormat(
-      "Usage: /buy <key> <duration>\nExamples: /buy abc123 30d, /buy abc123 2w, /buy abc123 1h30m"
+  match parts.as_slice() {
+    // /buy <duration> - generate new license
+    [duration_str] => {
+      let duration = humantime::parse_duration(duration_str).map_err(|e| {
+        ParseError::IncorrectFormat(
+          format!(
+            "Invalid duration '{}': {}\nUsage: /buy <duration> or /buy <key> <duration>\nExamples: 30d, 2w, 1h30m",
+            duration_str, e
+          )
+          .into(),
+        )
+      })?;
+      Ok((None, duration))
+    }
+    // /buy <key> <duration> - extend existing license
+    [key, duration_str] => {
+      let duration = humantime::parse_duration(duration_str).map_err(|e| {
+        ParseError::IncorrectFormat(
+          format!(
+            "Invalid duration '{}': {}\nExamples: 30d, 2w, 1h30m, 7days",
+            duration_str, e
+          )
+          .into(),
+        )
+      })?;
+      Ok((Some(key.to_string()), duration))
+    }
+    _ => Err(ParseError::IncorrectFormat(
+      "Usage:\n/buy <duration> - Generate new license\n/buy <key> <duration> - Extend existing license\nExamples: /buy 30d, /buy abc123 2w"
         .into(),
-    ));
+    )),
   }
+}
 
-  let duration = humantime::parse_duration(&duration_str).map_err(|e| {
-    ParseError::IncorrectFormat(
-      format!(
-        "Invalid duration '{}': {}\nExamples: 30d, 2w, 1h30m, 7days",
-        duration_str, e
-      )
-      .into(),
-    )
-  })?;
-
-  Ok((key, duration))
+/// Format balance in USDT (stored as nanoUSDT internally)
+fn format_usdt(nano_usdt: i64) -> String {
+  format!("{:.2} USDT", nano_usdt as f64 / NANO_USDT as f64)
 }
 
 #[derive(BotCommands, Clone)]
 #[command(rename_rule = "lowercase")]
 pub enum Command {
   Start,
-  // Admin commands below - users use button interface
   Help,
+  Link(String),
+  Ref(String),
+  Fund(String),
   Users,
-  Gen(String),
   #[command(parse_with = parse_buy)]
   Buy {
-    key: String,
+    key: Option<String>,
     duration: Duration,
   },
   Ban(String),
@@ -83,23 +102,24 @@ pub enum Command {
     version: String,
     changelog: String,
   },
-  /// Yank (remove from downloads) a build version
   Yank(String),
-  /// Un-yank (reactivate) a previously yanked build
   Unyank(String),
-  /// Alias for /yank (deprecated)
   #[command(hide)]
   Deactivate(String),
-  /// Admin stats - show global XP/drops summary
   GlobalStats,
+  SetRole(String),
+  SetRef(String),
+  RefStats,
+  Deposit(String),
+  Withdraw(String),
 }
 
 const ADMIN_HELP: &str = "\
 <b>📋 Admin Commands</b>
 
 <b>License Management:</b>
-/gen &lt;user_id&gt; [days] - Generate new license
-/buy &lt;key&gt; &lt;duration&gt; - Extend license (e.g. 30d, 2w, 1h30m)
+/buy &lt;duration&gt; - Generate new license (e.g. 30d, 2w)
+/buy &lt;key&gt; &lt;duration&gt; - Extend existing license
 /ban &lt;key&gt; - Block license and drop sessions
 /unban &lt;key&gt; - Unblock license
 /info &lt;key|user_id&gt; - Show license or user details
@@ -109,6 +129,15 @@ const ADMIN_HELP: &str = "\
 /publish &lt;file&gt; &lt;ver&gt; [log] - Publish new build
 /yank &lt;version&gt; - Remove build from downloads
 /unyank &lt;version&gt; - Reactivate yanked build
+
+<b>Referral System:</b>
+/setrole &lt;user_id&gt; &lt;role&gt; - Set user role (user/creator/admin)
+/setref &lt;user_id&gt; [rate%] [discount%] - Configure referral settings
+/refstats - Show referral statistics
+
+<b>Balance Management:</b>
+/deposit &lt;user_id&gt; &lt;amount_usdt&gt; - Add balance (e.g. 10.5)
+/withdraw &lt;user_id&gt; &lt;amount_usdt&gt; - Process withdrawal
 
 <b>System:</b>
 /users - List all registered users
@@ -147,6 +176,154 @@ pub async fn handle(
       bot
         .reply_html("Use /start to access the main menu with buttons.")
         .await?;
+      return Ok(());
+    }
+    Command::Link(key) => {
+      let result = sv.license.link_to_user(key.trim(), bot.user_id).await;
+      match result {
+        Ok(_) => {
+          bot
+            .reply_html(format!(
+              "✅ License <code>{}</code> has been linked to your account!",
+              key.trim()
+            ))
+            .await?;
+        }
+        Err(e) => {
+          bot.reply_html(format!("❌ {}", e.user_message())).await?;
+        }
+      }
+      return Ok(());
+    }
+    Command::Ref(arg) => {
+      let arg = arg.trim();
+      if arg.is_empty() || arg == "clear" || arg == "none" {
+        // Clear referral code
+        match sv.user.set_referred_by(bot.user_id, None).await {
+          Ok(_) => {
+            bot.reply_html("✅ Your referral code has been cleared.").await?;
+          }
+          Err(e) => {
+            bot.reply_html(format!("❌ {}", e.user_message())).await?;
+          }
+        }
+      } else {
+        // Set referral code (referrer's user ID)
+        match arg.parse::<i64>() {
+          Ok(referrer_id) => {
+            match sv.user.set_referred_by(bot.user_id, Some(referrer_id)).await
+            {
+              Ok(_) => {
+                // Get discount info
+                let stats = sv.referral.stats(referrer_id).await.ok();
+                let (discount, is_creator) = stats
+                  .map(|s| (s.discount_percent, s.is_active))
+                  .unwrap_or((0, false));
+
+                let text = if is_creator && discount > 0 {
+                  format!(
+                    "✅ Referral code set to <code>{}</code>\n\
+                    You will receive a {}% discount on purchases!",
+                    referrer_id, discount
+                  )
+                } else if is_creator {
+                  format!(
+                    "✅ Referral code set to <code>{}</code>\n\
+                    This is a verified creator.",
+                    referrer_id
+                  )
+                } else {
+                  format!(
+                    "✅ Referral code set to <code>{}</code>\n\
+                    <i>Note: This user is not a verified creator, so no discount is available.</i>",
+                    referrer_id
+                  )
+                };
+                bot.reply_html(text).await?;
+              }
+              Err(e) => {
+                bot.reply_html(format!("❌ {}", e.user_message())).await?;
+              }
+            }
+          }
+          Err(_) => {
+            bot
+              .reply_html(
+                "❌ Invalid referral code. Use: /ref <user_id> or /ref clear",
+              )
+              .await?;
+          }
+        }
+      }
+      return Ok(());
+    }
+    Command::Fund(amount_str) => {
+      let amount_str = amount_str.trim();
+      if amount_str.is_empty() {
+        bot.reply_html("Usage: /fund AMOUNT\nExample: /fund 10.5").await?;
+        return Ok(());
+      }
+
+      let amount_usdt: f64 = match amount_str.parse() {
+        Ok(a) => a,
+        Err(_) => {
+          bot
+            .reply_html(
+              "❌ Invalid amount. Use: /fund AMOUNT\nExample: /fund 10.5",
+            )
+            .await?;
+          return Ok(());
+        }
+      };
+
+      if amount_usdt < 1.0 {
+        bot.reply_html("❌ Minimum deposit is 1 USDT.").await?;
+        return Ok(());
+      }
+
+      let Some(cryptobot) = &app.cryptobot else {
+        bot
+          .reply_html("❌ Payment system is not configured. Contact support.")
+          .await?;
+        return Ok(());
+      };
+
+      let user = sv.user.by_id(bot.user_id).await.ok().flatten();
+      let referred_by = user.as_ref().and_then(|u| u.referred_by);
+
+      match cryptobot
+        .create_deposit_invoice(bot.user_id, amount_usdt, referred_by)
+        .await
+      {
+        Ok(invoice) => {
+          let _ = sv
+            .payment
+            .save_pending(
+              invoice.invoice_id,
+              bot.user_id,
+              amount_usdt,
+              referred_by,
+            )
+            .await;
+
+          let text = format!(
+            "💵 <b>Payment Invoice Created</b>\n\n\
+            <b>Amount:</b> {} USDT\n\n\
+            <a href=\"{}\">Click here to pay via CryptoBot</a>\n\n\
+            <i>After payment, use /start and click \"Check Payments\".</i>",
+            amount_usdt, invoice.bot_invoice_url
+          );
+          bot.reply_html(text).await?;
+        }
+        Err(e) => {
+          bot
+            .reply_html(format!(
+              "❌ Failed to create invoice: {}",
+              e.user_message()
+            ))
+            .await?;
+        }
+      }
       return Ok(());
     }
     _ => {}
@@ -201,11 +378,26 @@ async fn process_info_command(
       ));
     }
 
+    let role_str = match user.role {
+      UserRole::User => "User",
+      UserRole::Creator => "Creator",
+      UserRole::Admin => "Admin",
+    };
+
+    let balance_str = format_usdt(user.balance);
+    let referral_str = user
+      .referred_by
+      .map(|id| id.to_string())
+      .unwrap_or_else(|| "None".to_string());
+
     return Ok(format!(
       "👤 <b>User Info</b>\n\
       ID: <code>{}</code>\n\
       Name: {}\n\
-      Registered: {}\n\n\
+      Registered: {}\n\
+      Role: {}\n\
+      Balance: {}\n\
+      Referred by: {}\n\n\
       📊 <b>Global Stats</b>\n\
       XP (Week/Total): {} / {}\n\
       Runtime: {:.1}h\n\
@@ -215,6 +407,9 @@ async fn process_info_command(
       user.tg_user_id,
       username,
       utils::format_date(user.reg_date),
+      role_str,
+      balance_str,
+      referral_str,
       stats.weekly_xp,
       stats.total_xp,
       stats.runtime_hours,
@@ -376,34 +571,33 @@ async fn handle_admin_command(
   }
 
   let result: Result<String> = match cmd {
-    Command::Gen(args) => {
-      let parts: Vec<&str> = args.split_whitespace().collect();
-      let (target_user, days) = match parts.as_slice() {
-        [user_id] => (user_id.parse::<i64>().ok(), 0u64),
-        [user_id, days] => {
-          (user_id.parse::<i64>().ok(), days.parse::<u64>().unwrap_or(0))
-        }
-        _ => (None, 0),
-      };
-
-      match target_user {
-        Some(target_user) => sv
-          .license
-          .create(target_user, LicenseType::Pro, days)
-          .await
-          .map(|l| format!("✅ Key created:\n<code>{}</code>", l.key)),
-        None => Err(Error::InvalidArgs("Usage: /gen <user_id> [days]".into())),
-      }
-    }
-
     Command::Buy { key, duration } => {
-      sv.license.expires(&key, duration).await.map(|new_exp| {
-        let duration_str = humantime::format_duration(duration);
-        format!(
-          "✅ Key expires after {duration_str}.\nNew expiry: <code>{}</code>",
-          utils::format_date(new_exp)
-        )
-      })
+      let duration_str = humantime::format_duration(duration);
+      match key {
+        // /buy <duration> - generate new license for admin
+        None => {
+          let days = duration.as_secs() / 86400;
+          sv.license.create(bot.user_id, LicenseType::Pro, days).await.map(
+            |l| {
+              format!(
+                "✅ Key created ({}):\n<code>{}</code>\n\
+                Expires: {}",
+                duration_str,
+                l.key,
+                utils::format_date(l.expires_at)
+              )
+            },
+          )
+        }
+        // /buy <key> <duration> - extend existing license
+        Some(key) => sv.license.expires(&key, duration).await.map(|new_exp| {
+          format!(
+            "✅ Key extended by {}.\nNew expiry: <code>{}</code>",
+            duration_str,
+            utils::format_date(new_exp)
+          )
+        }),
+      }
     }
 
     Command::Ban(key) => {
@@ -542,6 +736,212 @@ async fn handle_admin_command(
       app.sessions.iter().map(|kv| kv.value().len()).sum::<usize>(),
       app.sessions.len()
     )),
+
+    Command::SetRole(args) => {
+      async {
+        let parts: Vec<&str> = args.split_whitespace().collect();
+        match parts.as_slice() {
+          [user_id_str, role_str] => {
+            let user_id = user_id_str
+              .parse::<i64>()
+              .map_err(|_| Error::InvalidArgs("Invalid user ID".into()))?;
+            let role = match *role_str {
+              "user" => UserRole::User,
+              "creator" => UserRole::Creator,
+              "admin" => UserRole::Admin,
+              _ => {
+                return Err(Error::InvalidArgs(
+                  "Invalid role. Use: user, creator, admin".into(),
+                ));
+              }
+            };
+            sv.user.set_role(user_id, role.clone()).await?;
+            Ok(format!("✅ User {} role set to {:?}", user_id, role))
+          }
+          _ => {
+            Err(Error::InvalidArgs("Usage: /setrole <user_id> <role>".into()))
+          }
+        }
+      }
+      .await
+    }
+
+    Command::SetRef(args) => {
+      async {
+        let parts: Vec<&str> = args.split_whitespace().collect();
+        // Configure referral settings for a user (user_id is their referral code)
+        let (user_id, rate, discount) = match parts.as_slice() {
+          [user_id_str] => {
+            let user_id = user_id_str
+              .parse::<i64>()
+              .map_err(|_| Error::InvalidArgs("Invalid user ID".into()))?;
+            (user_id, None, None)
+          }
+          [user_id_str, rate_str] => {
+            let user_id = user_id_str
+              .parse::<i64>()
+              .map_err(|_| Error::InvalidArgs("Invalid user ID".into()))?;
+            let rate = rate_str.parse::<i32>().ok();
+            (user_id, rate, None)
+          }
+          [user_id_str, rate_str, discount_str] => {
+            let user_id = user_id_str
+              .parse::<i64>()
+              .map_err(|_| Error::InvalidArgs("Invalid user ID".into()))?;
+            let rate = rate_str.parse::<i32>().ok();
+            let discount = discount_str.parse::<i32>().ok();
+            (user_id, rate, discount)
+          }
+          _ => {
+            return Err(Error::InvalidArgs(
+              "Usage: /setref <user_id> [rate%] [discount%]".into(),
+            ));
+          }
+        };
+
+        // Update settings if provided
+        if let Some(r) = rate {
+          sv.referral.set_commission_rate(user_id, r).await?;
+        }
+        if let Some(d) = discount {
+          sv.referral.set_discount_percent(user_id, d).await?;
+        }
+
+        let stats = sv.referral.stats(user_id).await?;
+        Ok(format!(
+          "✅ Referral settings for user {}\n\
+          <b>Referral code:</b> <code>{}</code>\n\
+          <b>Commission:</b> {}%\n\
+          <b>Customer discount:</b> {}%\n\
+          <b>Status:</b> {}",
+          user_id,
+          user_id,
+          stats.commission_rate,
+          stats.discount_percent,
+          if stats.is_active {
+            "Active (creator/admin)"
+          } else {
+            "Inactive (regular user)"
+          }
+        ))
+      }
+      .await
+    }
+
+    Command::RefStats => {
+      async {
+        let creators = sv.referral.all_creators().await?;
+        if creators.is_empty() {
+          return Ok("📭 No creators/admins with referral capability.".into());
+        }
+
+        let mut text = String::from("<b>📊 Referral Statistics</b>\n\n");
+        let mut total_sales = 0;
+        let mut total_earnings = 0i64;
+
+        for user in &creators {
+          let earnings_str = format_usdt(user.referral_earnings);
+          text.push_str(&format!(
+            "<code>{}</code>\n\
+            Rate: {}% | Discount: {}%\n\
+            Sales: {} | Earned: {}\n\n",
+            user.tg_user_id,
+            user.commission_rate,
+            user.discount_percent,
+            user.referral_sales,
+            earnings_str
+          ));
+          total_sales += user.referral_sales;
+          total_earnings += user.referral_earnings;
+        }
+
+        text.push_str(&format!(
+          "<b>Total:</b>\n\
+          Creators: {}\n\
+          Sales: {}\n\
+          Commissions: {}",
+          creators.len(),
+          total_sales,
+          format_usdt(total_earnings)
+        ));
+
+        Ok(text)
+      }
+      .await
+    }
+
+    Command::Deposit(args) => {
+      async {
+        let parts: Vec<&str> = args.split_whitespace().collect();
+        match parts.as_slice() {
+          [user_id_str, amount_str] => {
+            let user_id = user_id_str
+              .parse::<i64>()
+              .map_err(|_| Error::InvalidArgs("Invalid user ID".into()))?;
+            // Parse as USDT (e.g., "10.5" = 10.5 USDT)
+            let amount_usdt: f64 = amount_str
+              .parse()
+              .map_err(|_| Error::InvalidArgs("Invalid amount".into()))?;
+            let amount_nano = (amount_usdt * NANO_USDT as f64) as i64;
+
+            if amount_nano <= 0 {
+              return Err(Error::InvalidArgs("Amount must be positive".into()));
+            }
+
+            let new_balance = sv
+              .balance
+              .deposit(user_id, amount_nano, Some("Admin deposit".into()))
+              .await?;
+            Ok(format!(
+              "✅ Deposited {} to user {}\n\
+              New balance: {}",
+              format_usdt(amount_nano),
+              user_id,
+              format_usdt(new_balance)
+            ))
+          }
+          _ => Err(Error::InvalidArgs(
+            "Usage: /deposit <user_id> <amount_usdt>".into(),
+          )),
+        }
+      }
+      .await
+    }
+
+    Command::Withdraw(args) => {
+      async {
+        let parts: Vec<&str> = args.split_whitespace().collect();
+        match parts.as_slice() {
+          [user_id_str, amount_str] => {
+            let user_id = user_id_str
+              .parse::<i64>()
+              .map_err(|_| Error::InvalidArgs("Invalid user ID".into()))?;
+            // Parse as USDT (e.g., "10.5" = 10.5 USDT)
+            let amount_usdt: f64 = amount_str
+              .parse()
+              .map_err(|_| Error::InvalidArgs("Invalid amount".into()))?;
+            let amount_nano = (amount_usdt * NANO_USDT as f64) as i64;
+
+            if amount_nano <= 0 {
+              return Err(Error::InvalidArgs("Amount must be positive".into()));
+            }
+
+            let new_balance = sv.balance.withdraw(user_id, amount_nano).await?;
+            Ok(format!(
+              "✅ Withdrawal of {} processed for user {}\n\
+              New balance: {}",
+              format_usdt(amount_nano),
+              user_id,
+              format_usdt(new_balance)
+            ))
+          }
+          _ => Err(Error::InvalidArgs(
+            "Usage: /withdraw <user_id> <amount_usdt>".into(),
+          )),
+        }
+      }
+      .await
+    }
 
     _ => return Ok(()),
   };

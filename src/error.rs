@@ -20,6 +20,8 @@ pub enum Error {
   UserNotFound,
   #[error("License expired or blocked")]
   LicenseInvalid,
+  #[error("License already linked to another user")]
+  LicenseAlreadyLinked,
   #[error("Session limit reached")]
   SessionLimitReached,
   #[error("Promo is {0:?}")]
@@ -30,8 +32,20 @@ pub enum Error {
   BuildInactive,
   #[error("Build already active")]
   BuildAlreadyActive,
+  #[error("Referral code not found")]
+  ReferralNotFound,
+  #[error("Referral code inactive")]
+  ReferralInactive,
+  #[error("Insufficient balance")]
+  InsufficientBalance,
+  #[error("Withdrawal not allowed for regular users")]
+  WithdrawalNotAllowed,
   #[error("Invalid arguments: {0}")]
   InvalidArgs(String),
+  #[error("CryptoBot API error: {0}")]
+  CryptoBot(String),
+  #[error("Invoice not found")]
+  InvoiceNotFound,
   #[error("DB error: {0}")]
   Database(#[from] sea_orm::DbErr),
   #[error("IO error: {0}")]
@@ -41,12 +55,14 @@ pub enum Error {
 }
 
 impl Error {
-  /// User-friendly error message for telegram bot responses
   pub fn user_message(&self) -> String {
     match self {
       Error::LicenseNotFound => "Key not found".into(),
       Error::UserNotFound => "User not found".into(),
       Error::LicenseInvalid => "License expired or blocked".into(),
+      Error::LicenseAlreadyLinked => {
+        "This license is already linked to another user".into()
+      }
       Error::SessionLimitReached => "Session limit reached".into(),
       Error::Promo(Promo::Inactive) => "Promo is not active right now".into(),
       Error::Promo(Promo::Claimed) => {
@@ -55,7 +71,15 @@ impl Error {
       Error::BuildNotFound => "Build not found".into(),
       Error::BuildInactive => "Build is already yanked".into(),
       Error::BuildAlreadyActive => "Build is already active".into(),
+      Error::ReferralNotFound => "Referral code not found".into(),
+      Error::ReferralInactive => "Referral code is inactive".into(),
+      Error::InsufficientBalance => "Insufficient balance".into(),
+      Error::WithdrawalNotAllowed => {
+        "Only creators can withdraw to crypto".into()
+      }
       Error::InvalidArgs(msg) => msg.clone(),
+      Error::CryptoBot(msg) => format!("Payment error: {}", msg),
+      Error::InvoiceNotFound => "Invoice not found".into(),
       Error::Database(e) => format!("Database error: {}", e),
       Error::Io(e) => format!("IO error: {}", e),
       Error::Internal(msg) => format!("Internal error: {}", msg),
@@ -74,6 +98,9 @@ impl IntoResponse for Error {
       Error::LicenseInvalid => {
         (StatusCode::FORBIDDEN, "License expired or blocked")
       }
+      Error::LicenseAlreadyLinked => {
+        (StatusCode::CONFLICT, "License already linked to another user")
+      }
       Error::SessionLimitReached => {
         (StatusCode::CONFLICT, "Session limit reached")
       }
@@ -88,7 +115,21 @@ impl IntoResponse for Error {
       Error::BuildAlreadyActive => {
         (StatusCode::BAD_REQUEST, "Build already active")
       }
+      Error::ReferralNotFound => {
+        (StatusCode::NOT_FOUND, "Referral code not found")
+      }
+      Error::ReferralInactive => {
+        (StatusCode::BAD_REQUEST, "Referral code inactive")
+      }
+      Error::InsufficientBalance => {
+        (StatusCode::BAD_REQUEST, "Insufficient balance")
+      }
+      Error::WithdrawalNotAllowed => {
+        (StatusCode::FORBIDDEN, "Withdrawal not allowed")
+      }
       Error::InvalidArgs(msg) => (StatusCode::BAD_REQUEST, msg.as_str()),
+      Error::CryptoBot(_) => (StatusCode::BAD_GATEWAY, "Payment service error"),
+      Error::InvoiceNotFound => (StatusCode::NOT_FOUND, "Invoice not found"),
       Error::Io(_) => (StatusCode::INTERNAL_SERVER_ERROR, "IO error"),
       Error::Internal(_) => {
         (StatusCode::INTERNAL_SERVER_ERROR, "Internal error")

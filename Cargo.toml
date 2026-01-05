@@ -47,6 +47,9 @@ flate2 = "1.0"
 futures = "0.3"
 humantime = "2.1"
 libc = "0.2"
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
 
 [dev-dependencies]
 tokio-test = "0.4"
