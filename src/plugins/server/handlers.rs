@@ -128,6 +128,8 @@ pub async fn heartbeat(
 #[derive(Debug, Deserialize)]
 pub struct LogoutReq {
   pub key: String,
+  #[allow(dead_code)]
+  pub machine_id: String,
   pub session_id: String,
 }
 
