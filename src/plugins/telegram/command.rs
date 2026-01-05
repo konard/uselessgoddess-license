@@ -378,12 +378,6 @@ async fn process_info_command(
       ));
     }
 
-    let role_str = match user.role {
-      UserRole::User => "User",
-      UserRole::Creator => "Creator",
-      UserRole::Admin => "Admin",
-    };
-
     let balance_str = format_usdt(user.balance);
     let referral_str = user
       .referred_by
@@ -395,19 +389,19 @@ async fn process_info_command(
       ID: <code>{}</code>\n\
       Name: {}\n\
       Registered: {}\n\
-      Role: {}\n\
       Balance: {}\n\
       Referred by: {}\n\n\
       📊 <b>Global Stats</b>\n\
       XP (Week/Total): {} / {}\n\
-      Runtime: {:.1}h\n\
+      Runtime: {:.1}h\n\n\
+      Repr:\n\
+      {user:#?}\n\
       Total Sessions: {}\n\n\
       🔑 <b>Licenses ({})</b>\n\
       {}",
       user.tg_user_id,
       username,
       utils::format_date(user.reg_date),
-      role_str,
       balance_str,
       referral_str,
       stats.weekly_xp,

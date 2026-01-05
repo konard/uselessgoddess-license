@@ -622,15 +622,7 @@ async fn handle_buy_menu(
   let referred_by = user.as_ref().and_then(|u| u.referred_by);
   let balance_str = format_usdt(balance);
 
-  // Get discount if user has a referrer (only creators/admins offer discounts)
-  let discount_percent = if let Some(ref_id) = referred_by
-    && let Ok(stats) = sv.referral.stats(ref_id).await
-    && stats.can_withdraw
-  {
-    stats.discount_percent
-  } else {
-    0
-  };
+  let discount_percent: i32 = sv.referral.discount_percent(referred_by).await;
 
   let (month_price, quarter_price) = if discount_percent > 0 {
     let month_discounted =
@@ -749,12 +741,7 @@ async fn handle_buy_plan(
   let balance = user.as_ref().map(|u| u.balance).unwrap_or(0);
   let referred_by = user.as_ref().and_then(|u| u.referred_by);
 
-  // Get discount if user has a referrer
-  let discount_percent = if let Some(ref_id) = referred_by {
-    sv.referral.stats(ref_id).await.map(|s| s.discount_percent).unwrap_or(0)
-  } else {
-    0
-  };
+  let discount_percent: i32 = sv.referral.discount_percent(referred_by).await;
 
   let (price, days, plan_name) = match plan {
     "month" => {
@@ -893,12 +880,7 @@ async fn handle_add_funds(
   let balance = user.as_ref().map(|u| u.balance).unwrap_or(0);
   let referred_by = user.as_ref().and_then(|u| u.referred_by);
 
-  // Get discount if user has a referrer
-  let discount_percent = if let Some(ref_id) = referred_by {
-    sv.referral.stats(ref_id).await.map(|s| s.discount_percent).unwrap_or(0)
-  } else {
-    0
-  };
+  let discount_percent: i32 = sv.referral.discount_percent(referred_by).await;
 
   let (month_price, quarter_price) = if discount_percent > 0 {
     let month_discounted =
@@ -1259,11 +1241,7 @@ async fn handle_extend_license_key(
   let referred_by = user.as_ref().and_then(|u| u.referred_by);
   let now = Utc::now().naive_utc();
 
-  let discount_percent = if let Some(ref_id) = referred_by {
-    sv.referral.stats(ref_id).await.map(|s| s.discount_percent).unwrap_or(0)
-  } else {
-    0
-  };
+  let discount_percent: i32 = sv.referral.discount_percent(referred_by).await;
 
   let (month_price, quarter_price) = if discount_percent > 0 {
     (
@@ -1371,11 +1349,7 @@ async fn handle_extend_plan(
   let balance = user.as_ref().map(|u| u.balance).unwrap_or(0);
   let referred_by = user.as_ref().and_then(|u| u.referred_by);
 
-  let discount_percent = if let Some(ref_id) = referred_by {
-    sv.referral.stats(ref_id).await.map(|s| s.discount_percent).unwrap_or(0)
-  } else {
-    0
-  };
+  let discount_percent: i32 = sv.referral.discount_percent(referred_by).await;
 
   let (price, days, plan_name) = match plan {
     "month" => {

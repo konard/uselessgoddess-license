@@ -82,6 +82,17 @@ impl<'a> Referral<'a> {
     })
   }
 
+  pub async fn discount_percent(&self, ref_id: impl Into<Option<i64>>) -> i32 {
+    if let Some(ref_id) = ref_id.into()
+      && let Ok(stats) = self.stats(ref_id).await
+      && stats.can_withdraw
+    {
+      stats.discount_percent
+    } else {
+      0
+    }
+  }
+
   /// Update commission rate for a user (admin only)
   pub async fn set_commission_rate(
     &self,
