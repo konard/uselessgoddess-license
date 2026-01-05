@@ -10,6 +10,7 @@ mod m20251218_000007_add_detailed_stats;
 mod m20251218_000009_create_free_items;
 mod m20260104_000010_add_referral_system;
 mod m20260104_000011_create_pending_invoices;
+mod m20260105_000012_update_commission_default;
 
 pub struct Migrator;
 
@@ -27,6 +28,7 @@ impl MigratorTrait for Migrator {
       Box::new(m20251218_000009_create_free_items::Migration),
       Box::new(m20260104_000010_add_referral_system::Migration),
       Box::new(m20260104_000011_create_pending_invoices::Migration),
+      Box::new(m20260105_000012_update_commission_default::Migration),
     ]
   }
 }

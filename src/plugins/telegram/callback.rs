@@ -553,8 +553,11 @@ async fn handle_buy_menu(
   let balance_str = format_usdt(balance);
 
   // Get discount if user has a referrer
-  let discount_percent = if let Some(ref_id) = referred_by {
-    sv.referral.stats(ref_id).await.map(|s| s.discount_percent).unwrap_or(0)
+  let discount_percent = if let Some(ref_id) = referred_by
+    && let Ok(stats) = sv.referral.stats(ref_id).await
+    && stats.is_active
+  {
+    stats.discount_percent
   } else {
     0
   };

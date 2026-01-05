@@ -187,9 +187,7 @@ struct StatvfsResult {
 
 #[cfg(unix)]
 fn nix_statvfs(path: &Path) -> Option<StatvfsResult> {
-  use std::ffi::CString;
-  use std::mem::MaybeUninit;
-  use std::os::unix::ffi::OsStrExt;
+  use std::{ffi::CString, mem::MaybeUninit, os::unix::ffi::OsStrExt};
 
   let path_cstr = CString::new(path.as_os_str().as_bytes()).ok()?;
 

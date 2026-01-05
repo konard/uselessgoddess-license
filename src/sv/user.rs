@@ -26,7 +26,7 @@ impl<'a> User<'a> {
       balance: Set(0),
       role: Set(UserRole::User),
       referred_by: Set(None),
-      commission_rate: Set(25),
+      commission_rate: Set(10),
       discount_percent: Set(3),
       referral_sales: Set(0),
       referral_earnings: Set(0),
