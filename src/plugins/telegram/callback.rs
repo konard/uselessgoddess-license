@@ -34,6 +34,7 @@ pub enum Callback {
   PayManual,
   HaveLicense,
   SetRef,
+  AboutReferral,
   Back,
 }
 
@@ -59,6 +60,7 @@ impl Callback {
       Callback::PayManual => "pay_man".to_string(),
       Callback::HaveLicense => "have_lic".to_string(),
       Callback::SetRef => "set_ref".to_string(),
+      Callback::AboutReferral => "about_ref".to_string(),
       Callback::Back => "back".to_string(),
     }
   }
@@ -77,6 +79,7 @@ impl Callback {
       "pay_man" => Some(Callback::PayManual),
       "have_lic" => Some(Callback::HaveLicense),
       "set_ref" => Some(Callback::SetRef),
+      "about_ref" => Some(Callback::AboutReferral),
       "back" => Some(Callback::Back),
       _ if data.starts_with("dl_ver:") => {
         Some(Callback::DownloadVersion(data[7..].to_string()))
@@ -277,6 +280,9 @@ pub async fn handle(
         )
         .await?;
     }
+    Callback::AboutReferral => {
+      handle_about_referral(&sv, &bot).await?;
+    }
   }
 
   Ok(())
@@ -288,12 +294,9 @@ async fn handle_profile_view(
 ) -> ResponseResult<()> {
   let user = sv.user.by_id(bot.user_id).await.ok().flatten();
 
-  let (reg_date, balance, role, referral_stats) = match &user {
-    Some(u) => {
-      let stats = sv.referral.stats(bot.user_id).await.ok();
-      (utils::format_date(u.reg_date), u.balance, u.role.clone(), stats)
-    }
-    None => ("Unknown".into(), 0, UserRole::User, None),
+  let (reg_date, balance, role) = match &user {
+    Some(u) => (utils::format_date(u.reg_date), u.balance, u.role.clone()),
+    None => ("Unknown".into(), 0, UserRole::User),
   };
 
   let stats = sv.stats.display_stats(bot.user_id).await.ok();
@@ -313,25 +316,6 @@ async fn handle_profile_view(
     <b>Role:</b> {}",
     bot.user_id, reg_date, balance_str, role_str
   );
-
-  // Show referral info for creators/admins
-  if let Some(ref_stats) = referral_stats
-    && ref_stats.is_active
-  {
-    text.push_str(&format!(
-      "\n\n<b>🔗 Referral Info:</b>\n\
-        Your referral code: <code>{}</code>\n\
-        Commission rate: {}%\n\
-        Customer discount: {}%\n\
-        Total sales: {}\n\
-        Total earnings: {}",
-      bot.user_id,
-      ref_stats.commission_rate,
-      ref_stats.discount_percent,
-      ref_stats.total_sales,
-      format_usdt(ref_stats.total_earnings)
-    ));
-  }
 
   if let Some(s) = stats {
     text.push_str(&format!(
@@ -370,7 +354,93 @@ async fn handle_profile_view(
     }
   }
 
-  bot.edit_with_keyboard(text, back_keyboard()).await?;
+  let profile_keyboard = InlineKeyboardMarkup::new(vec![
+    vec![InlineKeyboardButton::callback(
+      "🔗 About Referral",
+      Callback::AboutReferral.to_data(),
+    )],
+    vec![InlineKeyboardButton::callback(
+      "« Back to Menu",
+      Callback::Back.to_data(),
+    )],
+  ]);
+
+  bot.edit_with_keyboard(text, profile_keyboard).await?;
+
+  Ok(())
+}
+
+/// Handle the "About Referral" button - shows different info based on user role
+async fn handle_about_referral(
+  sv: &Services<'_>,
+  bot: &ReplyBot,
+) -> ResponseResult<()> {
+  let user = sv.user.by_id(bot.user_id).await.ok().flatten();
+  let role = user.as_ref().map(|u| u.role.clone()).unwrap_or(UserRole::User);
+  let commission_rate = user.as_ref().map(|u| u.commission_rate).unwrap_or(10);
+
+  let profile_back_kb =
+    InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
+      "« Back to Profile",
+      Callback::Profile.to_data(),
+    )]]);
+
+  match role {
+    UserRole::Creator | UserRole::Admin => {
+      // Creators/Admins see their referral stats
+      let ref_stats = sv.referral.stats(bot.user_id).await.ok();
+
+      let text = if let Some(stats) = ref_stats {
+        format!(
+          "🔗 <b>Referral Program (Creator)</b>\n\n\
+          <b>Your referral code:</b> <code>{}</code>\n\n\
+          <b>📊 Your Stats:</b>\n\
+          Commission rate: {}%\n\
+          Customer discount: {}%\n\
+          Total sales: {}\n\
+          Total earnings: {}\n\n\
+          <b>💡 How it works:</b>\n\
+          Share your referral code (User ID) with others. When they use your code:\n\
+          • They get a {}% discount on purchases\n\
+          • You earn {}% commission on their purchases\n\n\
+          <i>Commissions are added to your balance automatically.</i>",
+          bot.user_id,
+          stats.commission_rate,
+          stats.discount_percent,
+          stats.total_sales,
+          format_usdt(stats.total_earnings),
+          stats.discount_percent,
+          stats.commission_rate
+        )
+      } else {
+        format!(
+          "🔗 <b>Referral Program (Creator)</b>\n\n\
+          <b>Your referral code:</b> <code>{}</code>\n\n\
+          <i>Share this code with others to earn commission on their purchases.</i>",
+          bot.user_id
+        )
+      };
+
+      bot.edit_with_keyboard(text, profile_back_kb).await?;
+    }
+    UserRole::User => {
+      // Regular users see that they can invite friends to earn bonus
+      let text = format!(
+        "🔗 <b>Referral Program</b>\n\n\
+        <b>Your referral code:</b> <code>{}</code>\n\n\
+        <b>💡 Invite Friends & Earn!</b>\n\
+        Share your referral code with friends. When they make a purchase using your code:\n\
+        • You receive <b>{}%</b> of their purchase as bonus balance\n\
+        • This bonus can be used to buy new licenses\n\n\
+        <b>How to share:</b>\n\
+        Just give your User ID <code>{}</code> to your friends and ask them to use /ref command to set it.\n\n\
+        <i>Note: To earn commission like creators, contact support to upgrade your account.</i>",
+        bot.user_id, commission_rate, bot.user_id
+      );
+
+      bot.edit_with_keyboard(text, profile_back_kb).await?;
+    }
+  }
 
   Ok(())
 }
