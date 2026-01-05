@@ -105,10 +105,10 @@ impl<'a> Stats<'a> {
       .decode(raw_base64)
       .map_err(|_| Error::InvalidArgs("Invalid base64".into()))?;
 
-    let mut decoder = GzDecoder::new(&compressed[..]);
-    let mut json_str = String::new();
-    decoder.read_to_string(&mut json_str).map_err(|e| {
-      Error::InvalidArgs(format!("Decompression failed: {}", e))
+    let mut json_str = String::new();  
+    let decoder = GzDecoder::new(&compressed[..]);
+    decoder.take(4 * 1024 * 1024).read_to_string(&mut json_str).map_err(|err| {
+      Error::InvalidArgs(format!("Decompression failed: {err}"))
     })?;
 
     let payload: MetricPayload = json::from_str(&json_str)

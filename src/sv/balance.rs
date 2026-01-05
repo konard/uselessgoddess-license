@@ -38,6 +38,7 @@ impl<'a> Balance<'a> {
       .await?
       .ok_or(Error::UserNotFound)?;
 
+    // TODO: use atomic update
     let new_balance = user.balance + amount;
 
     user::ActiveModel { balance: Set(new_balance), ..user.into() }
@@ -123,6 +124,7 @@ impl<'a> Balance<'a> {
       .await?
       .ok_or(Error::UserNotFound)?;
 
+    // TODO: use atomic update
     let new_balance = user.balance + amount;
 
     user::ActiveModel { balance: Set(new_balance), ..user.into() }
