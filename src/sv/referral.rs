@@ -77,7 +77,8 @@ impl<'a> Referral<'a> {
       discount_percent: user.discount_percent,
       total_sales: user.referral_sales,
       total_earnings: user.referral_earnings,
-      can_withdraw: user.role == UserRole::Creator || user.role == UserRole::Admin,
+      can_withdraw: user.role == UserRole::Creator
+        || user.role == UserRole::Admin,
     })
   }
 
