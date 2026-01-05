@@ -64,9 +64,9 @@ impl Default for Config {
     Self {
       builds_directory: String::from("./builds"),
       session_lifetime: 120,
-      banned_session_lifetime: 30 * 60, 
+      banned_session_lifetime: 30 * 60,
       backup_hours: 1,
-      download_token_lifetime: 10 * 60, 
+      download_token_lifetime: 10 * 60,
       base_url: String::from("http://localhost:3000"),
       gc_min_free_space: 500 * 1024 * 1024, // 500MB
       gc_check_interval_secs: 60,
@@ -102,7 +102,7 @@ pub struct AppState {
   backup_hash: AtomicU64,
 }
 
-// TODO: we need to transactions too 
+// TODO: we need to transactions too
 fn hash_licenses(licenses: &[license::Model]) -> u64 {
   let mut hasher = DefaultHasher::new();
   for lic in licenses {

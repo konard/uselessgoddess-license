@@ -61,7 +61,9 @@ pub async fn heartbeat(
   if app.is_session_banned(&req.session_id) {
     return (
       StatusCode::TOO_MANY_REQUESTS,
-      Json(HeartbeatRes::invalid("Session recently logged out, do not abuse plz")),
+      Json(HeartbeatRes::invalid(
+        "Session recently logged out, do not abuse plz",
+      )),
     );
   }
 
