@@ -27,6 +27,17 @@ pub struct Session {
 
 pub type Sessions = DashMap<String, Vec<Session>>;
 
+/// Banned session stored in DashMap with expiry (for recently logged out sessions)
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct BannedSession {
+  pub key: String,
+  pub banned_at: DateTime,
+}
+
+/// Maps session_id to BannedSession
+pub type BannedSessions = DashMap<String, BannedSession>;
+
 /// Download token stored in DashMap with expiry
 #[derive(Debug, Clone)]
 pub struct DownloadToken {
@@ -40,6 +51,7 @@ pub type DownloadTokens = DashMap<String, DownloadToken>;
 pub struct Config {
   pub builds_directory: String,
   pub session_lifetime: i64,
+  pub banned_session_lifetime: i64,
   pub backup_hours: u64,
   pub download_token_lifetime: i64,
   pub base_url: String,
@@ -52,6 +64,7 @@ impl Default for Config {
     Self {
       builds_directory: String::from("./builds"),
       session_lifetime: 120,
+      banned_session_lifetime: 30, // 30 seconds cooldown after logout
       backup_hours: 1,
       download_token_lifetime: 600, // 10 minutes
       base_url: String::from("http://localhost:3000"),
@@ -79,6 +92,7 @@ pub struct AppState {
   pub bot: Bot,
   pub admins: HashSet<i64>,
   pub sessions: Sessions,
+  pub banned_sessions: BannedSessions,
   pub download_tokens: DownloadTokens,
   pub secret: String,
   pub config: Config,
@@ -136,6 +150,7 @@ impl AppState {
     Self {
       db,
       sessions: DashMap::new(),
+      banned_sessions: DashMap::new(),
       download_tokens: DashMap::new(),
       bot: Bot::new(bot_token),
       admins,
@@ -248,6 +263,56 @@ impl AppState {
 
   pub fn drop_sessions(&self, key: &str) {
     self.sessions.remove(key);
+  }
+
+  /// Logout a session and add it to the ban list to prevent immediate re-use
+  pub fn logout_session(&self, key: &str, session_id: &str) -> bool {
+    let now = Utc::now().naive_utc();
+
+    // Remove the session from active sessions
+    let mut removed = false;
+    if let Some(mut sessions) = self.sessions.get_mut(key) {
+      let initial_len = sessions.len();
+      sessions.retain(|s| s.session_id != session_id);
+      removed = sessions.len() < initial_len;
+
+      // Clean up empty entries
+      if sessions.is_empty() {
+        drop(sessions);
+        self.sessions.remove(key);
+      }
+    }
+
+    // Add to ban list if session was found and removed
+    if removed {
+      self.banned_sessions.insert(
+        session_id.to_string(),
+        BannedSession { key: key.to_string(), banned_at: now },
+      );
+    }
+
+    removed
+  }
+
+  /// Check if a session_id is currently banned
+  pub fn is_session_banned(&self, session_id: &str) -> bool {
+    let now = Utc::now().naive_utc();
+    let timeout = self.config.banned_session_lifetime;
+
+    if let Some(banned) = self.banned_sessions.get(session_id) {
+      return (now - banned.banned_at).num_seconds() < timeout;
+    }
+    false
+  }
+
+  /// Garbage collect expired banned sessions
+  pub fn gc_banned_sessions(&self) {
+    let now = Utc::now().naive_utc();
+    let timeout = self.config.banned_session_lifetime;
+
+    self
+      .banned_sessions
+      .retain(|_, bs| (now - bs.banned_at).num_seconds() < timeout);
   }
 
   pub fn create_download_token(&self, version: &str) -> String {
