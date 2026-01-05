@@ -11,7 +11,7 @@ use crate::{
   entity::user::UserRole,
   prelude::*,
   state::{AppState, Services},
-  sv::referral::NANO_USDT,
+  sv::referral::{NANO_USDT, ReferralStats},
 };
 
 /// Callback data enum - provides type-safe callback handling
@@ -387,30 +387,31 @@ async fn handle_about_referral(
 
   match role {
     UserRole::Creator | UserRole::Admin => {
-      // Creators/Admins see their referral stats
       let ref_stats = sv.referral.stats(bot.user_id).await.ok();
 
-      let text = if let Some(stats) = ref_stats {
+      let text = if let Some(ReferralStats {
+        commission_rate,
+        discount_percent,
+        total_sales,
+        total_earnings,
+        ..
+      }) = ref_stats
+      {
         format!(
           "🔗 <b>Referral Program (Creator)</b>\n\n\
-          <b>Your referral code:</b> <code>{}</code>\n\n\
+          <b>Your referral code:</b> <code>{code}</code>\n\n\
           <b>📊 Your Stats:</b>\n\
-          Commission rate: {}%\n\
-          Customer discount: {}%\n\
-          Total sales: {}\n\
-          Total earnings: {}\n\n\
+          Commission rate: {commission_rate}%\n\
+          Customer discount: {discount_percent}%\n\
+          Total sales: {total_sales}\n\
+          Total earnings: {usdt}\n\n\
           <b>💡 How it works:</b>\n\
-          Share your referral code (User ID) with others. When they use your code:\n\
-          • They get a {}% discount on purchases\n\
-          • You earn {}% commission on their purchases\n\n\
+          Share your code (<code>{code}</code>) with others. When they use your code:\n\
+          • They get a {discount_percent}% discount on purchases\n\
+          • You earn {commission_rate}% commission on their purchases\n\n\
           <i>Commissions are added to your balance automatically.</i>",
-          bot.user_id,
-          stats.commission_rate,
-          stats.discount_percent,
-          stats.total_sales,
-          format_usdt(stats.total_earnings),
-          stats.discount_percent,
-          stats.commission_rate
+          usdt = format_usdt(total_earnings),
+          code = bot.user_id,
         )
       } else {
         format!(
@@ -424,18 +425,17 @@ async fn handle_about_referral(
       bot.edit_with_keyboard(text, profile_back_kb).await?;
     }
     UserRole::User => {
-      // Regular users see that they can invite friends to earn bonus
       let text = format!(
         "🔗 <b>Referral Program</b>\n\n\
-        <b>Your referral code:</b> <code>{}</code>\n\n\
+        <b>Your referral code:</b> <code>{code}</code>\n\n\
         <b>💡 Invite Friends & Earn!</b>\n\
         Share your referral code with friends. When they make a purchase using your code:\n\
-        • You receive <b>{}%</b> of their purchase as bonus balance\n\
+        • You receive <b>{commission_rate}%</b> of their purchase as bonus balance\n\
         • This bonus can be used to buy new licenses\n\n\
         <b>How to share:</b>\n\
-        Just give your User ID <code>{}</code> to your friends and ask them to use /ref command to set it.\n\n\
+        Just give your code (<code>{code}</code>) to your friends and ask them to use /ref command to set it.\n\n\
         <i>Note: To earn commission like creators, contact support to upgrade your account.</i>",
-        bot.user_id, commission_rate, bot.user_id
+        code = bot.user_id
       );
 
       bot.edit_with_keyboard(text, profile_back_kb).await?;
