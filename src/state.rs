@@ -64,9 +64,9 @@ impl Default for Config {
     Self {
       builds_directory: String::from("./builds"),
       session_lifetime: 120,
-      banned_session_lifetime: 30, // 30 seconds cooldown after logout
+      banned_session_lifetime: 30 * 60, 
       backup_hours: 1,
-      download_token_lifetime: 600, // 10 minutes
+      download_token_lifetime: 10 * 60, 
       base_url: String::from("http://localhost:3000"),
       gc_min_free_space: 500 * 1024 * 1024, // 500MB
       gc_check_interval_secs: 60,
@@ -91,6 +91,7 @@ pub struct AppState {
   pub db: DatabaseConnection,
   pub bot: Bot,
   pub admins: HashSet<i64>,
+  // TODO: replace this dashmaps with custom wrappers that stores time of expiration
   pub sessions: Sessions,
   pub banned_sessions: BannedSessions,
   pub download_tokens: DownloadTokens,
@@ -101,6 +102,7 @@ pub struct AppState {
   backup_hash: AtomicU64,
 }
 
+// TODO: we need to transactions too 
 fn hash_licenses(licenses: &[license::Model]) -> u64 {
   let mut hasher = DefaultHasher::new();
   for lic in licenses {
@@ -265,25 +267,21 @@ impl AppState {
     self.sessions.remove(key);
   }
 
-  /// Logout a session and add it to the ban list to prevent immediate re-use
   pub fn logout_session(&self, key: &str, session_id: &str) -> bool {
     let now = Utc::now().naive_utc();
 
-    // Remove the session from active sessions
     let mut removed = false;
     if let Some(mut sessions) = self.sessions.get_mut(key) {
       let initial_len = sessions.len();
       sessions.retain(|s| s.session_id != session_id);
       removed = sessions.len() < initial_len;
 
-      // Clean up empty entries
       if sessions.is_empty() {
         drop(sessions);
         self.sessions.remove(key);
       }
     }
 
-    // Add to ban list if session was found and removed
     if removed {
       self.banned_sessions.insert(
         session_id.to_string(),
@@ -294,7 +292,6 @@ impl AppState {
     removed
   }
 
-  /// Check if a session_id is currently banned
   pub fn is_session_banned(&self, session_id: &str) -> bool {
     let now = Utc::now().naive_utc();
     let timeout = self.config.banned_session_lifetime;
@@ -305,7 +302,6 @@ impl AppState {
     false
   }
 
-  /// Garbage collect expired banned sessions
   pub fn gc_banned_sessions(&self) {
     let now = Utc::now().naive_utc();
     let timeout = self.config.banned_session_lifetime;

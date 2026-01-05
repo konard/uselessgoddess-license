@@ -58,11 +58,10 @@ pub async fn heartbeat(
   let now = Utc::now().naive_utc();
   let magic = generate_magic(&req.session_id, &app.secret);
 
-  // Check if this session_id was recently logged out (in ban list)
   if app.is_session_banned(&req.session_id) {
     return (
       StatusCode::TOO_MANY_REQUESTS,
-      Json(HeartbeatRes::invalid("Session recently logged out, please wait")),
+      Json(HeartbeatRes::invalid("Session recently logged out, do not abuse plz")),
     );
   }
 
@@ -130,33 +129,14 @@ pub struct LogoutReq {
   pub session_id: String,
 }
 
-#[derive(Debug, Serialize)]
-pub struct LogoutRes {
-  pub success: bool,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub message: Option<String>,
-}
-
-impl LogoutRes {
-  pub fn ok() -> Self {
-    Self { success: true, message: None }
-  }
-
-  pub fn invalid(message: impl Into<String>) -> Self {
-    Self { success: false, message: Some(message.into()) }
-  }
-}
-
 pub async fn logout(
   State(app): State<Arc<AppState>>,
   Json(req): Json<LogoutReq>,
-) -> (StatusCode, Json<LogoutRes>) {
-  let removed = app.logout_session(&req.key, &req.session_id);
-
-  if removed {
-    (StatusCode::OK, Json(LogoutRes::ok()))
+) -> StatusCode {
+  if app.logout_session(&req.key, &req.session_id) {
+    StatusCode::OK
   } else {
-    (StatusCode::NOT_FOUND, Json(LogoutRes::invalid("Session not found")))
+    StatusCode::NOT_FOUND
   }
 }
 
