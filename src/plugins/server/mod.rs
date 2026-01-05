@@ -36,6 +36,7 @@ impl super::Plugin for Plugin {
       .route("/health", get(handlers::health))
       .route("/api/download", get(handlers::download))
       .route("/api/heartbeat", post(handlers::heartbeat))
+      .route("/api/logout", post(handlers::logout))
       .route("/api/metrics", post(handlers::submit_metrics))
       // TODO: split configuration
       .route("/api/cache/steam/free-games", get(steam::free_games))

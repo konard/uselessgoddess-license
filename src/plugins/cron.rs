@@ -15,6 +15,7 @@ impl Plugin for GC {
     loop {
       interval.tick().await;
       app.gc_sessions();
+      app.gc_banned_sessions();
       app.gc_download_tokens();
     }
   }
