@@ -22,7 +22,7 @@ impl<'a> Referral<'a> {
 
   /// Validate a referrer by their user ID
   /// Returns the referrer if they exist (any user can be a referrer)
-  /// Only creators/admins earn commission, but anyone can give discounts
+  /// All users earn commission, but only creators/admins can withdraw
   pub async fn validate_referrer(
     &self,
     referrer_id: i64,
@@ -36,7 +36,8 @@ impl<'a> Referral<'a> {
   }
 
   /// Record a sale made through a referrer
-  /// Returns the commission amount in nanoUSDT (0 if referrer is not a creator/admin)
+  /// Returns the commission amount in nanoUSDT
+  /// All users receive commission on their balance
   pub async fn record_sale(
     &self,
     referrer_id: i64,
@@ -49,17 +50,12 @@ impl<'a> Referral<'a> {
       .await?
       .ok_or(Error::ReferralNotFound)?;
 
-    // Only creators/admins earn commission, regular users don't
-    if referrer.role != UserRole::Creator && referrer.role != UserRole::Admin {
-      txn.commit().await?;
-      return Ok(0);
-    }
-
     let commission = (sale_amount * referrer.commission_rate as i64) / 100;
 
     user::ActiveModel {
       referral_sales: Set(referrer.referral_sales + 1),
       referral_earnings: Set(referrer.referral_earnings + commission),
+      balance: Set(referrer.balance + commission),
       ..referrer.into()
     }
     .update(&txn)
@@ -81,7 +77,8 @@ impl<'a> Referral<'a> {
       discount_percent: user.discount_percent,
       total_sales: user.referral_sales,
       total_earnings: user.referral_earnings,
-      is_active: user.role == UserRole::Creator || user.role == UserRole::Admin,
+      can_withdraw: user.role == UserRole::Creator
+        || user.role == UserRole::Admin,
     })
   }
 
@@ -142,7 +139,7 @@ pub struct ReferralStats {
   pub discount_percent: i32,
   pub total_sales: i32,
   pub total_earnings: i64,
-  pub is_active: bool,
+  pub can_withdraw: bool,
 }
 
 #[cfg(test)]
@@ -176,7 +173,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn test_regular_user_can_be_referrer_but_no_commission() {
+  async fn test_regular_user_earns_commission() {
     let db = test_db::setup().await;
 
     let now = Utc::now().naive_utc();
@@ -195,20 +192,18 @@ mod tests {
     .await
     .unwrap();
 
-    // Regular users can now be referrers (anyone can share their user_id)
     let result = Referral::new(&db).validate_referrer(12345).await;
     assert!(result.is_ok());
 
-    // But they don't earn commission from sales
     let commission =
       Referral::new(&db).record_sale(12345, MONTH_PRICE).await.unwrap();
-    assert_eq!(commission, 0); // No commission for regular users
+    assert_eq!(commission, 2_500_000);
 
-    // Verify no earnings were recorded
     let user =
       user::Entity::find_by_id(12345i64).one(&db).await.unwrap().unwrap();
-    assert_eq!(user.referral_sales, 0);
-    assert_eq!(user.referral_earnings, 0);
+    assert_eq!(user.referral_sales, 1);
+    assert_eq!(user.referral_earnings, 2_500_000);
+    assert_eq!(user.balance, 2_500_000);
   }
 
   #[tokio::test]
@@ -241,5 +236,6 @@ mod tests {
       user::Entity::find_by_id(12345i64).one(&db).await.unwrap().unwrap();
     assert_eq!(user.referral_sales, 1);
     assert_eq!(user.referral_earnings, 2_500_000);
+    assert_eq!(user.balance, 2_500_000);
   }
 }

@@ -214,19 +214,19 @@ pub async fn handle(
             match sv.user.set_referred_by(bot.user_id, Some(referrer_id)).await
             {
               Ok(_) => {
-                // Get discount info
+                // Get discount info (only creators/admins offer discounts)
                 let stats = sv.referral.stats(referrer_id).await.ok();
-                let (discount, is_creator) = stats
-                  .map(|s| (s.discount_percent, s.is_active))
+                let (discount, can_offer_discount) = stats
+                  .map(|s| (s.discount_percent, s.can_withdraw))
                   .unwrap_or((0, false));
 
-                let text = if is_creator && discount > 0 {
+                let text = if can_offer_discount && discount > 0 {
                   format!(
                     "✅ Referral code set to <code>{}</code>\n\
                     You will receive a {}% discount on purchases!",
                     referrer_id, discount
                   )
-                } else if is_creator {
+                } else if can_offer_discount {
                   format!(
                     "✅ Referral code set to <code>{}</code>\n\
                     This is a verified creator.",
@@ -813,15 +813,15 @@ async fn handle_admin_command(
           <b>Referral code:</b> <code>{}</code>\n\
           <b>Commission:</b> {}%\n\
           <b>Customer discount:</b> {}%\n\
-          <b>Status:</b> {}",
+          <b>Withdrawal:</b> {}",
           user_id,
           user_id,
           stats.commission_rate,
           stats.discount_percent,
-          if stats.is_active {
-            "Active (creator/admin)"
+          if stats.can_withdraw {
+            "Allowed (creator/admin)"
           } else {
-            "Inactive (regular user)"
+            "Not allowed (regular user)"
           }
         ))
       }
