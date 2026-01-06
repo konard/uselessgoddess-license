@@ -225,7 +225,6 @@ pub async fn handle(
       let user = sv.user.by_id(bot.user_id).await.ok().flatten();
       let current_ref = user.as_ref().and_then(|u| u.referred_by);
 
-      // Get privacy-safe display code for the current referrer
       let current_ref_display = if let Some(ref_id) = current_ref {
         sv.referral
           .display_code(ref_id)
@@ -672,28 +671,21 @@ async fn handle_buy_menu(
   );
 
   if discount_percent > 0 {
-    // Get privacy-safe display code for the referrer
     let display_code = sv
       .referral
       .display_code(referred_by.unwrap())
       .await
-      .unwrap_or_else(|| "referral".to_string());
+      .unwrap_or_else(|| "[referral]".into());
 
     text.push_str(&format!(
-      "• 1 Month: <s>10.00</s> <b>{:.2} USDT</b> ({}% off)\n\
-       • 3 Months: <s>25.00</s> <b>{:.2} USDT</b> ({}% off)\n\n\
-       <i>🎉 Discount from referral code <code>{}</code></i>\n",
-      month_price,
-      discount_percent,
-      quarter_price,
-      discount_percent,
-      display_code
+      "• 1 Month: <s>{MONTH_PRICE:.2}</s> <b>{month_price:.2} USDT</b> ({discount_percent}% off)\n\
+       • 3 Months: <s>{QUARTER_PRICE:.2}</s> <b>{quarter_price:.2} USDT</b> ({discount_percent}% off)\n\n\
+       <i>🎉 Discount from referral code <code>{display_code}</code></i>\n",
     ));
   } else {
     text.push_str(&format!(
-      "• 1 Month: <b>{:.2} USDT</b>\n\
-       • 3 Months: <b>{:.2} USDT</b>\n",
-      month_price, quarter_price
+      "• 1 Month: <b>{month_price:.2} USDT</b>\n\
+       • 3 Months: <b>{quarter_price:.2} USDT</b>\n",
     ));
   }
 

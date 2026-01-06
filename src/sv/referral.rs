@@ -175,10 +175,6 @@ impl<'a> Referral<'a> {
     )
   }
 
-  /// Get a privacy-safe display code for a referrer
-  /// - For creators/admins with custom code: returns the custom code
-  /// - For creators/admins without custom code: returns "creator referral" to hide their ID
-  /// - For regular users (friends): returns their user ID (acceptable to show)
   pub async fn display_code(&self, referrer_id: i64) -> Option<String> {
     let referrer = user::Entity::find_by_id(referrer_id)
       .one(self.db)
@@ -189,17 +185,11 @@ impl<'a> Referral<'a> {
     let is_creator =
       referrer.role == UserRole::Creator || referrer.role == UserRole::Admin;
 
-    if is_creator {
-      // For creators/admins, use custom code or generic "creator referral"
-      Some(
-        referrer
-          .referral_code
-          .unwrap_or_else(|| "creator referral".to_string()),
-      )
+    Some(if is_creator {
+      referrer.referral_code.unwrap_or_else(|| "[creator referral]".to_string())
     } else {
-      // For regular users (friends), showing their ID is acceptable
-      Some(referrer_id.to_string())
-    }
+      referrer_id.to_string()
+    })
   }
 }
 
