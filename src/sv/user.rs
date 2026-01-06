@@ -30,6 +30,7 @@ impl<'a> User<'a> {
       discount_percent: Set(3),
       referral_sales: Set(0),
       referral_earnings: Set(0),
+      referral_code: Set(None),
     };
 
     Ok(user.insert(self.db).await?)
@@ -111,5 +112,63 @@ impl<'a> User<'a> {
   #[allow(dead_code)]
   pub async fn count(&self) -> Result<u64> {
     Ok(user::Entity::find().count(self.db).await?)
+  }
+
+  /// Find a user by their custom referral code
+  pub async fn by_referral_code(
+    &self,
+    code: &str,
+  ) -> Result<Option<user::Model>> {
+    let user = user::Entity::find()
+      .filter(user::Column::ReferralCode.eq(code))
+      .one(self.db)
+      .await?;
+    Ok(user)
+  }
+
+  /// Set custom referral code for a user (only creators/admins)
+  pub async fn set_referral_code(
+    &self,
+    tg_user_id: i64,
+    code: Option<String>,
+  ) -> Result<()> {
+    let user = user::Entity::find_by_id(tg_user_id)
+      .one(self.db)
+      .await?
+      .ok_or(Error::UserNotFound)?;
+
+    // Only creators and admins can set custom referral codes
+    if user.role != UserRole::Creator && user.role != UserRole::Admin {
+      return Err(Error::InvalidArgs(
+        "Only creators can set custom referral codes".into(),
+      ));
+    }
+
+    // Validate code format if provided
+    if let Some(ref c) = code {
+      if c.len() < 3 || c.len() > 20 {
+        return Err(Error::InvalidArgs(
+          "Referral code must be 3-20 characters".into(),
+        ));
+      }
+      if !c.chars().all(|ch| ch.is_alphanumeric() || ch == '_' || ch == '-') {
+        return Err(Error::InvalidArgs(
+          "Referral code can only contain letters, numbers, underscores, and hyphens".into(),
+        ));
+      }
+
+      // Check if code is already taken
+      if let Some(existing) = self.by_referral_code(c).await?
+        && existing.tg_user_id != tg_user_id
+      {
+        return Err(Error::InvalidArgs("Referral code already taken".into()));
+      }
+    }
+
+    user::ActiveModel { referral_code: Set(code), ..user.into() }
+      .update(self.db)
+      .await?;
+
+    Ok(())
   }
 }

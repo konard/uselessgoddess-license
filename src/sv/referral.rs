@@ -35,6 +35,38 @@ impl<'a> Referral<'a> {
     Ok(referrer)
   }
 
+  /// Find a referrer by custom referral code (for creators only)
+  /// Returns the creator if the code is valid
+  pub async fn find_by_code(&self, code: &str) -> Result<user::Model> {
+    let referrer = user::Entity::find()
+      .filter(user::Column::ReferralCode.eq(code))
+      .one(self.db)
+      .await?
+      .ok_or(Error::ReferralNotFound)?;
+
+    // Only creators/admins can use custom referral codes
+    if referrer.role != UserRole::Creator && referrer.role != UserRole::Admin {
+      return Err(Error::ReferralNotFound);
+    }
+
+    Ok(referrer)
+  }
+
+  /// Resolve a referral code to a user ID
+  /// Supports both custom codes (for creators) and user IDs (for regular users)
+  pub async fn resolve_code(&self, code: &str) -> Result<i64> {
+    // First try to parse as user ID
+    if let Ok(user_id) = code.parse::<i64>() {
+      // Validate that the user exists
+      let _ = self.validate_referrer(user_id).await?;
+      return Ok(user_id);
+    }
+
+    // Try to find by custom referral code
+    let referrer = self.find_by_code(code).await?;
+    Ok(referrer.tg_user_id)
+  }
+
   /// Record a sale made through a referrer
   /// Returns the commission amount in nanoUSDT
   /// All users receive commission on their balance
@@ -173,6 +205,7 @@ mod tests {
       discount_percent: Set(3),
       referral_sales: Set(0),
       referral_earnings: Set(0),
+      referral_code: Set(None),
     }
     .insert(&db)
     .await
@@ -198,6 +231,7 @@ mod tests {
       discount_percent: Set(3),
       referral_sales: Set(0),
       referral_earnings: Set(0),
+      referral_code: Set(None),
     }
     .insert(&db)
     .await
@@ -232,6 +266,7 @@ mod tests {
       discount_percent: Set(3),
       referral_sales: Set(0),
       referral_earnings: Set(0),
+      referral_code: Set(None),
     }
     .insert(&db)
     .await
@@ -248,5 +283,70 @@ mod tests {
     assert_eq!(user.referral_sales, 1);
     assert_eq!(user.referral_earnings, 2_500_000);
     assert_eq!(user.balance, 2_500_000);
+  }
+
+  #[tokio::test]
+  async fn test_custom_referral_code() {
+    let db = test_db::setup().await;
+
+    let now = Utc::now().naive_utc();
+    user::ActiveModel {
+      tg_user_id: Set(12345),
+      reg_date: Set(now),
+      balance: Set(0),
+      role: Set(UserRole::Creator),
+      referred_by: Set(None),
+      commission_rate: Set(25),
+      discount_percent: Set(3),
+      referral_sales: Set(0),
+      referral_earnings: Set(0),
+      referral_code: Set(Some("CREATOR123".to_string())),
+    }
+    .insert(&db)
+    .await
+    .unwrap();
+
+    // Test find by custom code
+    let referrer = Referral::new(&db).find_by_code("CREATOR123").await.unwrap();
+    assert_eq!(referrer.tg_user_id, 12345);
+
+    // Test resolve_code with custom code
+    let user_id = Referral::new(&db).resolve_code("CREATOR123").await.unwrap();
+    assert_eq!(user_id, 12345);
+
+    // Test resolve_code with user ID
+    let user_id = Referral::new(&db).resolve_code("12345").await.unwrap();
+    assert_eq!(user_id, 12345);
+  }
+
+  #[tokio::test]
+  async fn test_custom_code_only_for_creators() {
+    let db = test_db::setup().await;
+
+    let now = Utc::now().naive_utc();
+    // Create a regular user with a referral code (should be ignored)
+    user::ActiveModel {
+      tg_user_id: Set(12345),
+      reg_date: Set(now),
+      balance: Set(0),
+      role: Set(UserRole::User),
+      referred_by: Set(None),
+      commission_rate: Set(25),
+      discount_percent: Set(3),
+      referral_sales: Set(0),
+      referral_earnings: Set(0),
+      referral_code: Set(Some("USER123".to_string())),
+    }
+    .insert(&db)
+    .await
+    .unwrap();
+
+    // Regular user's custom code should not be found
+    let result = Referral::new(&db).find_by_code("USER123").await;
+    assert!(result.is_err());
+
+    // But resolve_code should still work with user ID
+    let user_id = Referral::new(&db).resolve_code("12345").await.unwrap();
+    assert_eq!(user_id, 12345);
   }
 }

@@ -378,6 +378,7 @@ async fn handle_about_referral(
   let user = sv.user.by_id(bot.user_id).await.ok().flatten();
   let role = user.as_ref().map(|u| u.role.clone()).unwrap_or(UserRole::User);
   let commission_rate = user.as_ref().map(|u| u.commission_rate).unwrap_or(10);
+  let custom_code = user.as_ref().and_then(|u| u.referral_code.clone());
 
   let profile_back_kb =
     InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
@@ -389,6 +390,10 @@ async fn handle_about_referral(
     UserRole::Creator | UserRole::Admin => {
       let ref_stats = sv.referral.stats(bot.user_id).await.ok();
 
+      // Display custom code if set, otherwise show user ID
+      let user_id_str = bot.user_id.to_string();
+      let code_display = custom_code.as_deref().unwrap_or(&user_id_str);
+
       let text = if let Some(ReferralStats {
         commission_rate,
         discount_percent,
@@ -397,6 +402,16 @@ async fn handle_about_referral(
         ..
       }) = ref_stats
       {
+        let code_note = if custom_code.is_some() {
+          format!(
+            "\n<i>Tip: Users can also use your ID <code>{}</code> as referral code.</i>",
+            bot.user_id
+          )
+        } else {
+          "\n<i>Tip: Ask an admin to set a custom code with /setcode</i>"
+            .to_string()
+        };
+
         format!(
           "🔗 <b>Referral Program (Creator)</b>\n\n\
           <b>Your referral code:</b> <code>{code}</code>\n\n\
@@ -409,16 +424,16 @@ async fn handle_about_referral(
           Share your code (<code>{code}</code>) with others. When they use your code:\n\
           • They get a {discount_percent}% discount on purchases\n\
           • You earn {commission_rate}% commission on their purchases\n\n\
-          <i>Commissions are added to your balance automatically.</i>",
+          <i>Commissions are added to your balance automatically.</i>{code_note}",
           usdt = format_usdt(total_earnings),
-          code = bot.user_id,
+          code = code_display,
         )
       } else {
         format!(
           "🔗 <b>Referral Program (Creator)</b>\n\n\
           <b>Your referral code:</b> <code>{}</code>\n\n\
           <i>Share this code with others to earn commission on their purchases.</i>",
-          bot.user_id
+          code_display
         )
       };
 
@@ -427,14 +442,14 @@ async fn handle_about_referral(
     UserRole::User => {
       let text = format!(
         "🔗 <b>Referral Program</b>\n\n\
-        <b>Your referral code:</b> <code>{code}</code>\n\n\
+        <b>Your user ID:</b> <code>{code}</code>\n\n\
         <b>💡 Invite Friends & Earn!</b>\n\
-        Share your referral code with friends. When they make a purchase using your code:\n\
+        Share your user ID with friends. When they make a purchase using your ID:\n\
         • You receive <b>{commission_rate}%</b> of their purchase as bonus balance\n\
         • This bonus can be used to buy new licenses\n\n\
         <b>How to share:</b>\n\
-        Just give your code (<code>{code}</code>) to your friends and ask them to use /ref command to set it.\n\n\
-        <i>Note: To earn commission like creators, contact support to upgrade your account.</i>",
+        Just give your ID (<code>{code}</code>) to your friends and ask them to use /ref command.\n\n\
+        <i>Note: Only creators can have custom referral codes. Contact support to become a creator.</i>",
         code = bot.user_id
       );
 
