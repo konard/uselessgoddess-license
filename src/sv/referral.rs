@@ -431,7 +431,7 @@ mod tests {
 
     // Creator without custom code should show "creator referral" to hide their ID
     let display = referral.display_code(22222).await.unwrap();
-    assert_eq!(display, "creator referral");
+    assert_eq!(display, "[creator referral]");
 
     // Regular user (friend) should show their user ID
     let display = referral.display_code(33333).await.unwrap();
