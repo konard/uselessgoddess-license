@@ -232,6 +232,7 @@ mod tests {
       discount_percent: Set(3),
       referral_sales: Set(0),
       referral_earnings: Set(0),
+      referral_code: Set(None),
     }
     .insert(&db)
     .await
@@ -260,6 +261,7 @@ mod tests {
       discount_percent: Set(3),
       referral_sales: Set(0),
       referral_earnings: Set(0),
+      referral_code: Set(None),
     }
     .insert(&db)
     .await
@@ -288,6 +290,7 @@ mod tests {
       discount_percent: Set(3),
       referral_sales: Set(0),
       referral_earnings: Set(0),
+      referral_code: Set(None),
     }
     .insert(&db)
     .await
@@ -313,6 +316,7 @@ mod tests {
       discount_percent: Set(3),
       referral_sales: Set(0),
       referral_earnings: Set(0),
+      referral_code: Set(None),
     }
     .insert(&db)
     .await
@@ -338,6 +342,7 @@ mod tests {
       discount_percent: Set(3),
       referral_sales: Set(0),
       referral_earnings: Set(0),
+      referral_code: Set(None),
     }
     .insert(&db)
     .await

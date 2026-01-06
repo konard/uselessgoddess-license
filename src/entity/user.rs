@@ -34,6 +34,8 @@ pub struct Model {
   pub referral_sales: i32,
   /// Total earnings from referrals (in nanoUSDT)
   pub referral_earnings: i64,
+  /// Custom referral code (only for creators/admins)
+  pub referral_code: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

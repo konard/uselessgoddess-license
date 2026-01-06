@@ -84,6 +84,7 @@ pub enum Command {
   Link(String),
   Ref(String),
   Fund(String),
+  MyCode(String),
   Users,
   #[command(parse_with = parse_buy)]
   Buy {
@@ -109,6 +110,7 @@ pub enum Command {
   GlobalStats,
   SetRole(String),
   SetRef(String),
+  SetCode(String),
   RefStats,
   Deposit(String),
   Withdraw(String),
@@ -133,6 +135,7 @@ const ADMIN_HELP: &str = "\
 <b>Referral System:</b>
 /setrole &lt;user_id&gt; &lt;role&gt; - Set user role (user/creator/admin)
 /setref &lt;user_id&gt; [rate%] [discount%] - Configure referral settings
+/setcode &lt;user_id&gt; &lt;code|clear&gt; - Set custom referral code (creators only)
 /refstats - Show referral statistics
 
 <b>Balance Management:</b>
@@ -208,8 +211,8 @@ pub async fn handle(
           }
         }
       } else {
-        // Set referral code (referrer's user ID)
-        match arg.parse::<i64>() {
+        // Set referral code - supports both user IDs and custom codes
+        match sv.referral.resolve_code(arg).await {
           Ok(referrer_id) => {
             match sv.user.set_referred_by(bot.user_id, Some(referrer_id)).await
             {
@@ -222,21 +225,21 @@ pub async fn handle(
 
                 let text = if can_offer_discount && discount > 0 {
                   format!(
-                    "✅ Referral code set to <code>{}</code>\n\
+                    "✅ Referral code <code>{}</code> applied!\n\
                     You will receive a {}% discount on purchases!",
-                    referrer_id, discount
+                    arg, discount
                   )
                 } else if can_offer_discount {
                   format!(
-                    "✅ Referral code set to <code>{}</code>\n\
+                    "✅ Referral code <code>{}</code> applied!\n\
                     This is a verified creator.",
-                    referrer_id
+                    arg
                   )
                 } else {
                   format!(
-                    "✅ Referral code set to <code>{}</code>\n\
+                    "✅ Referral code <code>{}</code> applied!\n\
                     <i>Note: This user is not a verified creator, so no discount is available.</i>",
-                    referrer_id
+                    arg
                   )
                 };
                 bot.reply_html(text).await?;
@@ -246,13 +249,45 @@ pub async fn handle(
               }
             }
           }
-          Err(_) => {
+          Err(e) => {
+            bot.reply_html(format!("❌ {}", e.user_message())).await?;
+          }
+        }
+      }
+      return Ok(());
+    }
+    Command::MyCode(code) => {
+      let code = code.trim();
+      let code_opt = if code.is_empty() || code == "clear" || code == "none" {
+        None
+      } else {
+        Some(code.to_string())
+      };
+
+      match sv.user.set_referral_code(bot.user_id, code_opt.clone()).await {
+        Ok(_) => {
+          if let Some(c) = code_opt {
+            bot
+              .reply_html(format!(
+                "✅ Your custom referral code is now set!\n\
+                <b>Code:</b> <code>{}</code>\n\n\
+                Share this code with others. They can use:\n\
+                <code>/ref {}</code>\n\
+                to set you as their referrer.",
+                c, c
+              ))
+              .await?;
+          } else {
             bot
               .reply_html(
-                "❌ Invalid referral code. Use: /ref <user_id> or /ref clear",
+                "✅ Your custom referral code has been cleared.\n\
+                Users can still use your user ID as referral code.",
               )
               .await?;
           }
+        }
+        Err(e) => {
+          bot.reply_html(format!("❌ {}", e.user_message())).await?;
         }
       }
       return Ok(());
@@ -801,15 +836,22 @@ async fn handle_admin_command(
           sv.referral.set_discount_percent(user_id, d).await?;
         }
 
+        let user = sv.user.by_id(user_id).await?.ok_or(Error::UserNotFound)?;
         let stats = sv.referral.stats(user_id).await?;
+        let code_display = user
+          .referral_code
+          .as_ref()
+          .map(|c| format!("<code>{}</code>", c))
+          .unwrap_or_else(|| format!("<code>{}</code> (user ID)", user_id));
+
         Ok(format!(
           "✅ Referral settings for user {}\n\
-          <b>Referral code:</b> <code>{}</code>\n\
+          <b>Referral code:</b> {}\n\
           <b>Commission:</b> {}%\n\
           <b>Customer discount:</b> {}%\n\
           <b>Withdrawal:</b> {}",
           user_id,
-          user_id,
+          code_display,
           stats.commission_rate,
           stats.discount_percent,
           if stats.can_withdraw {
@@ -818,6 +860,43 @@ async fn handle_admin_command(
             "Not allowed (regular user)"
           }
         ))
+      }
+      .await
+    }
+
+    Command::SetCode(args) => {
+      async {
+        let parts: Vec<&str> = args.split_whitespace().collect();
+        match parts.as_slice() {
+          [user_id_str, code] => {
+            let user_id = user_id_str
+              .parse::<i64>()
+              .map_err(|_| Error::InvalidArgs("Invalid user ID".into()))?;
+
+            let code_opt =
+              if *code == "clear" || *code == "none" { None } else { Some(code.to_string()) };
+
+            sv.user.set_referral_code(user_id, code_opt.clone()).await?;
+
+            if let Some(c) = code_opt {
+              Ok(format!(
+                "✅ Custom referral code set for user {}\n\
+                <b>Code:</b> <code>{}</code>\n\n\
+                Users can now use /ref {} to set this creator as their referrer.",
+                user_id, c, c
+              ))
+            } else {
+              Ok(format!(
+                "✅ Custom referral code cleared for user {}\n\
+                Users will need to use their user ID as referral code.",
+                user_id
+              ))
+            }
+          }
+          _ => Err(Error::InvalidArgs(
+            "Usage: /setcode <user_id> <code|clear>".into(),
+          )),
+        }
       }
       .await
     }
@@ -835,10 +914,16 @@ async fn handle_admin_command(
 
         for user in &creators {
           let earnings_str = format_usdt(user.referral_earnings);
+          let code_display = user
+            .referral_code
+            .as_ref()
+            .map(|c| format!("<code>{}</code>", c))
+            .unwrap_or_else(|| format!("ID: <code>{}</code>", user.tg_user_id));
           text.push_str(&format!(
-            "<code>{}</code>\n\
+            "{} ({})\n\
             Rate: {}% | Discount: {}%\n\
             Sales: {} | Earned: {}\n\n",
+            code_display,
             user.tg_user_id,
             user.commission_rate,
             user.discount_percent,
