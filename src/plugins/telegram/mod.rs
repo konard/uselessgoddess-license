@@ -1,17 +1,18 @@
 mod callback;
 mod command;
 
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
-use command::Command;
+use command::{AdminCommand, Command, UserCommand};
 use teloxide::{
   Bot, RequestError,
   dispatching::{Dispatcher, HandlerExt, UpdateFilterExt},
   prelude::*,
   types::{
-    CallbackQuery, ChatId, InlineKeyboardMarkup, InputFile, Message, MessageId,
-    ParseMode, Update,
+    BotCommandScope, CallbackQuery, ChatId, InlineKeyboardMarkup, InputFile,
+    Message, MessageId, ParseMode, Update,
   },
+  utils::command::BotCommands,
 };
 
 use crate::{prelude::*, state::AppState};
@@ -26,10 +27,46 @@ impl super::Plugin for Plugin {
   }
 }
 
+/// Set up command hints for users and admins.
+/// Users see only user commands, admins see both user and admin commands.
+async fn setup_commands(bot: &Bot, admins: &HashSet<i64>) {
+  // Set user commands as default for all users
+  if let Err(e) = bot
+    .set_my_commands(UserCommand::bot_commands())
+    .scope(BotCommandScope::Default)
+    .await
+  {
+    warn!("Failed to set default commands: {}", e);
+  }
+
+  // Set combined commands for each admin (user commands + admin commands)
+  let mut admin_commands = UserCommand::bot_commands();
+  admin_commands.extend(AdminCommand::bot_commands());
+
+  for &admin_id in admins {
+    if let Err(e) = bot
+      .set_my_commands(admin_commands.clone())
+      .scope(BotCommandScope::Chat { chat_id: ChatId(admin_id).into() })
+      .await
+    {
+      warn!("Failed to set admin commands for {}: {}", admin_id, e);
+    }
+  }
+
+  info!(
+    "Command hints configured: {} user commands, {} admin commands",
+    UserCommand::bot_commands().len(),
+    AdminCommand::bot_commands().len()
+  );
+}
+
 pub async fn run_bot(app: Arc<AppState>) {
   info!("Starting Telegram bot...");
 
   let bot = app.bot.clone();
+
+  // Set up command hints for users and admins
+  setup_commands(&bot, &app.admins).await;
 
   let handler = teloxide::dptree::entry()
     .branch(Update::filter_message().filter_command::<Command>().endpoint({

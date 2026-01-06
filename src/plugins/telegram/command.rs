@@ -76,6 +76,72 @@ fn format_usdt(nano_usdt: i64) -> String {
   format!("{:.2} USDT", nano_usdt as f64 / NANO_USDT as f64)
 }
 
+/// User-facing commands shown to all users in command hints.
+/// The String fields are not read - they exist only for macro compatibility.
+#[derive(BotCommands, Clone)]
+#[command(rename_rule = "lowercase")]
+#[allow(dead_code)]
+pub enum UserCommand {
+  #[command(description = "Start the bot and show main menu")]
+  Start,
+  #[command(description = "Show help message")]
+  Help,
+  #[command(description = "Link an existing license to your account")]
+  Link(String),
+  #[command(description = "Set your referral code for discounts")]
+  Ref(String),
+  #[command(description = "Add funds to your balance")]
+  Fund(String),
+  #[command(description = "Set or clear your custom referral code")]
+  MyCode(String),
+}
+
+/// Admin-only commands shown to admins in command hints.
+/// These are simplified versions just for generating command descriptions.
+/// The String fields are not read - they exist only for macro compatibility.
+#[derive(BotCommands, Clone)]
+#[command(rename_rule = "lowercase")]
+#[allow(dead_code)]
+pub enum AdminCommand {
+  #[command(description = "Generate or extend license")]
+  Buy(String),
+  #[command(description = "Block license and drop sessions")]
+  Ban(String),
+  #[command(description = "Unblock license")]
+  Unban(String),
+  #[command(description = "Show license or user details")]
+  Info(String),
+  #[command(description = "Show active sessions count")]
+  Stats,
+  #[command(description = "List all registered users")]
+  Users,
+  #[command(description = "Manual database backup")]
+  Backup,
+  #[command(description = "List all builds")]
+  Builds,
+  #[command(description = "Publish new build")]
+  Publish(String),
+  #[command(description = "Remove build from downloads")]
+  Yank(String),
+  #[command(description = "Reactivate yanked build")]
+  Unyank(String),
+  #[command(description = "Show global XP/drops summary")]
+  GlobalStats,
+  #[command(description = "Set user role (user/creator/admin)")]
+  SetRole(String),
+  #[command(description = "Configure referral settings")]
+  SetRef(String),
+  #[command(description = "Set custom referral code for user")]
+  SetCode(String),
+  #[command(description = "Show referral statistics")]
+  RefStats,
+  #[command(description = "Add balance to user")]
+  Deposit(String),
+  #[command(description = "Process user withdrawal")]
+  Withdraw(String),
+}
+
+/// Internal command enum used for parsing all commands
 #[derive(BotCommands, Clone)]
 #[command(rename_rule = "lowercase")]
 pub enum Command {
