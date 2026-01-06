@@ -683,7 +683,11 @@ async fn handle_buy_menu(
       "• 1 Month: <s>10.00</s> <b>{:.2} USDT</b> ({}% off)\n\
        • 3 Months: <s>25.00</s> <b>{:.2} USDT</b> ({}% off)\n\n\
        <i>🎉 Discount from referral code <code>{}</code></i>\n",
-      month_price, discount_percent, quarter_price, discount_percent, display_code
+      month_price,
+      discount_percent,
+      quarter_price,
+      discount_percent,
+      display_code
     ));
   } else {
     text.push_str(&format!(
