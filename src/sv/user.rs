@@ -210,16 +210,19 @@ mod tests {
     let user_sv = User::new(&db);
 
     // Purely numeric code should be rejected
-    let result = user_sv.set_referral_code(12345, Some("12345".to_string())).await;
+    let result =
+      user_sv.set_referral_code(12345, Some("12345".to_string())).await;
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("purely numeric"));
 
     // Alphanumeric code should work
-    let result = user_sv.set_referral_code(12345, Some("CODE123".to_string())).await;
+    let result =
+      user_sv.set_referral_code(12345, Some("CODE123".to_string())).await;
     assert!(result.is_ok());
 
     // Code with underscore should work
-    let result = user_sv.set_referral_code(12345, Some("my_code".to_string())).await;
+    let result =
+      user_sv.set_referral_code(12345, Some("my_code".to_string())).await;
     assert!(result.is_ok());
   }
 }
