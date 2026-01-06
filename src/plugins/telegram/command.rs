@@ -84,6 +84,7 @@ pub enum Command {
   Link(String),
   Ref(String),
   Fund(String),
+  MyCode(String),
   Users,
   #[command(parse_with = parse_buy)]
   Buy {
@@ -251,6 +252,42 @@ pub async fn handle(
           Err(e) => {
             bot.reply_html(format!("❌ {}", e.user_message())).await?;
           }
+        }
+      }
+      return Ok(());
+    }
+    Command::MyCode(code) => {
+      let code = code.trim();
+      let code_opt = if code.is_empty() || code == "clear" || code == "none" {
+        None
+      } else {
+        Some(code.to_string())
+      };
+
+      match sv.user.set_referral_code(bot.user_id, code_opt.clone()).await {
+        Ok(_) => {
+          if let Some(c) = code_opt {
+            bot
+              .reply_html(format!(
+                "✅ Your custom referral code is now set!\n\
+                <b>Code:</b> <code>{}</code>\n\n\
+                Share this code with others. They can use:\n\
+                <code>/ref {}</code>\n\
+                to set you as their referrer.",
+                c, c
+              ))
+              .await?;
+          } else {
+            bot
+              .reply_html(
+                "✅ Your custom referral code has been cleared.\n\
+                Users can still use your user ID as referral code.",
+              )
+              .await?;
+          }
+        }
+        Err(e) => {
+          bot.reply_html(format!("❌ {}", e.user_message())).await?;
         }
       }
       return Ok(());

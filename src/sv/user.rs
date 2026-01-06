@@ -157,6 +157,13 @@ impl<'a> User<'a> {
         ));
       }
 
+      // Prevent codes that are purely numeric to avoid confusion with user IDs
+      if c.chars().all(|ch| ch.is_ascii_digit()) {
+        return Err(Error::InvalidArgs(
+          "Referral code cannot be purely numeric (would conflict with user IDs)".into(),
+        ));
+      }
+
       // Check if code is already taken
       if let Some(existing) = self.by_referral_code(c).await?
         && existing.tg_user_id != tg_user_id
@@ -170,5 +177,49 @@ impl<'a> User<'a> {
       .await?;
 
     Ok(())
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::sv::test_utils::test_db;
+
+  #[tokio::test]
+  async fn test_numeric_code_rejected() {
+    let db = test_db::setup().await;
+
+    let now = Utc::now().naive_utc();
+    // Create a creator user
+    user::ActiveModel {
+      tg_user_id: Set(12345),
+      reg_date: Set(now),
+      balance: Set(0),
+      role: Set(UserRole::Creator),
+      referred_by: Set(None),
+      commission_rate: Set(25),
+      discount_percent: Set(3),
+      referral_sales: Set(0),
+      referral_earnings: Set(0),
+      referral_code: Set(None),
+    }
+    .insert(&db)
+    .await
+    .unwrap();
+
+    let user_sv = User::new(&db);
+
+    // Purely numeric code should be rejected
+    let result = user_sv.set_referral_code(12345, Some("12345".to_string())).await;
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("purely numeric"));
+
+    // Alphanumeric code should work
+    let result = user_sv.set_referral_code(12345, Some("CODE123".to_string())).await;
+    assert!(result.is_ok());
+
+    // Code with underscore should work
+    let result = user_sv.set_referral_code(12345, Some("my_code".to_string())).await;
+    assert!(result.is_ok());
   }
 }
