@@ -174,6 +174,33 @@ impl<'a> Referral<'a> {
         .await?,
     )
   }
+
+  /// Get a privacy-safe display code for a referrer
+  /// - For creators/admins with custom code: returns the custom code
+  /// - For creators/admins without custom code: returns "creator referral" to hide their ID
+  /// - For regular users (friends): returns their user ID (acceptable to show)
+  pub async fn display_code(&self, referrer_id: i64) -> Option<String> {
+    let referrer = user::Entity::find_by_id(referrer_id)
+      .one(self.db)
+      .await
+      .ok()
+      .flatten()?;
+
+    let is_creator =
+      referrer.role == UserRole::Creator || referrer.role == UserRole::Admin;
+
+    if is_creator {
+      // For creators/admins, use custom code or generic "creator referral"
+      Some(
+        referrer
+          .referral_code
+          .unwrap_or_else(|| "creator referral".to_string()),
+      )
+    } else {
+      // For regular users (friends), showing their ID is acceptable
+      Some(referrer_id.to_string())
+    }
+  }
 }
 
 #[derive(Debug)]
@@ -348,5 +375,80 @@ mod tests {
     // But resolve_code should still work with user ID
     let user_id = Referral::new(&db).resolve_code("12345").await.unwrap();
     assert_eq!(user_id, 12345);
+  }
+
+  #[tokio::test]
+  async fn test_display_code() {
+    let db = test_db::setup().await;
+    let now = Utc::now().naive_utc();
+
+    // Create a creator with custom code
+    user::ActiveModel {
+      tg_user_id: Set(11111),
+      reg_date: Set(now),
+      balance: Set(0),
+      role: Set(UserRole::Creator),
+      referred_by: Set(None),
+      commission_rate: Set(25),
+      discount_percent: Set(3),
+      referral_sales: Set(0),
+      referral_earnings: Set(0),
+      referral_code: Set(Some("CREATOR_CODE".to_string())),
+    }
+    .insert(&db)
+    .await
+    .unwrap();
+
+    // Create a creator without custom code
+    user::ActiveModel {
+      tg_user_id: Set(22222),
+      reg_date: Set(now),
+      balance: Set(0),
+      role: Set(UserRole::Creator),
+      referred_by: Set(None),
+      commission_rate: Set(25),
+      discount_percent: Set(3),
+      referral_sales: Set(0),
+      referral_earnings: Set(0),
+      referral_code: Set(None),
+    }
+    .insert(&db)
+    .await
+    .unwrap();
+
+    // Create a regular user (friend)
+    user::ActiveModel {
+      tg_user_id: Set(33333),
+      reg_date: Set(now),
+      balance: Set(0),
+      role: Set(UserRole::User),
+      referred_by: Set(None),
+      commission_rate: Set(10),
+      discount_percent: Set(0),
+      referral_sales: Set(0),
+      referral_earnings: Set(0),
+      referral_code: Set(None),
+    }
+    .insert(&db)
+    .await
+    .unwrap();
+
+    let referral = Referral::new(&db);
+
+    // Creator with custom code should show the custom code
+    let display = referral.display_code(11111).await.unwrap();
+    assert_eq!(display, "CREATOR_CODE");
+
+    // Creator without custom code should show "creator referral" to hide their ID
+    let display = referral.display_code(22222).await.unwrap();
+    assert_eq!(display, "creator referral");
+
+    // Regular user (friend) should show their user ID
+    let display = referral.display_code(33333).await.unwrap();
+    assert_eq!(display, "33333");
+
+    // Non-existent user should return None
+    let display = referral.display_code(99999).await;
+    assert!(display.is_none());
   }
 }

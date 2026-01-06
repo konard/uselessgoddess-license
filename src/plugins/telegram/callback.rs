@@ -225,16 +225,25 @@ pub async fn handle(
       let user = sv.user.by_id(bot.user_id).await.ok().flatten();
       let current_ref = user.as_ref().and_then(|u| u.referred_by);
 
+      // Get privacy-safe display code for the current referrer
+      let current_ref_display = if let Some(ref_id) = current_ref {
+        sv.referral
+          .display_code(ref_id)
+          .await
+          .map(|code| format!("<code>{}</code>", code))
+          .unwrap_or_else(|| "None".to_string())
+      } else {
+        "None".to_string()
+      };
+
       let text = format!(
         "🔗 <b>Set Referral Code</b>\n\n\
-        A referral code is the User ID of someone who referred you.\n\
-        When you have a referral code, you get a discount on purchases!\n\n\
+        A referral code can be a creator's custom code or a friend's User ID.\n\
+        When you have a referral code from a creator, you get a discount on purchases!\n\n\
         <b>Your current referral code:</b> {}\n\n\
-        <b>To set/change:</b> <code>/ref USER_ID</code>\n\
+        <b>To set/change:</b> <code>/ref CODE</code>\n\
         <b>To clear:</b> <code>/ref clear</code>",
-        current_ref
-          .map(|id| format!("<code>{}</code>", id))
-          .unwrap_or_else(|| "None".to_string())
+        current_ref_display
       );
       bot.edit_with_keyboard(text, back_keyboard()).await?;
     }
@@ -663,15 +672,18 @@ async fn handle_buy_menu(
   );
 
   if discount_percent > 0 {
+    // Get privacy-safe display code for the referrer
+    let display_code = sv
+      .referral
+      .display_code(referred_by.unwrap())
+      .await
+      .unwrap_or_else(|| "referral".to_string());
+
     text.push_str(&format!(
       "• 1 Month: <s>10.00</s> <b>{:.2} USDT</b> ({}% off)\n\
        • 3 Months: <s>25.00</s> <b>{:.2} USDT</b> ({}% off)\n\n\
        <i>🎉 Discount from referral code <code>{}</code></i>\n",
-      month_price,
-      discount_percent,
-      quarter_price,
-      discount_percent,
-      referred_by.unwrap()
+      month_price, discount_percent, quarter_price, discount_percent, display_code
     ));
   } else {
     text.push_str(&format!(
