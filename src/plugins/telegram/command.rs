@@ -3,7 +3,7 @@ use std::{path::Path, sync::Arc, time::Duration};
 use futures::future;
 use teloxide::{
   prelude::*,
-  types::InputFile,
+  types::{InputFile, ParseMode},
   utils::command::{BotCommands, ParseError},
 };
 
@@ -740,32 +740,72 @@ async fn handle_admin_command(
     },
 
     Command::Publish { filename, version, changelog } => {
-      let file_path = format!("{}/{}", app.config.builds_directory, filename);
-      let path = Path::new(&file_path);
+      async {
+        let file_path = format!("{}/{}", app.config.builds_directory, filename);
+        let path = Path::new(&file_path);
 
-      if !path.exists() {
-        Err(Error::InvalidArgs(format!(
-          "File not found: {}\n\nUpload the file to the builds folder using scp:\nscp file.exe server:{}/",
-          file_path, app.config.builds_directory
-        )))
-      } else {
+        if !path.exists() {
+          return Err(Error::InvalidArgs(format!(
+            "File not found: {}\n\nUpload the file to the builds folder using scp:\nscp file.exe server:{}/",
+            file_path, app.config.builds_directory
+          )));
+        }
+
         let changelog_opt =
-          if changelog.is_empty() { None } else { Some(changelog) };
+          if changelog.is_empty() { None } else { Some(changelog.clone()) };
 
-        sv.build.create(version.clone(), file_path, changelog_opt).await.map(
-          |build| {
+        let build =
+          sv.build.create(version.clone(), file_path, changelog_opt).await?;
+
+        // Notify users with active licenses about the new version
+        let active_users = sv.user.with_active_licenses().await.unwrap_or_default();
+        let mut notified = 0;
+        let mut failed = 0;
+
+        for user in &active_users {
+          let notification = if changelog.is_empty() {
             format!(
-              "✅ Build published!\n\n\
-              <b>Version:</b> {}\n\
-              <b>File:</b> {}\n\
-              <b>Created:</b> {}",
-              build.version,
-              build.file_path,
-              utils::format_date(build.created_at)
+              "🚀 <b>New Version Released!</b>\n\n\
+              <b>Version:</b> {}\n\n\
+              Use /start to download the latest build.",
+              build.version
             )
-          },
-        )
+          } else {
+            format!(
+              "🚀 <b>New Version Released!</b>\n\n\
+              <b>Version:</b> {}\n\
+              <b>Changelog:</b>\n<code>{}</code>\n\n\
+              Use /start to download the latest build.",
+              build.version, changelog
+            )
+          };
+
+          match app
+            .bot
+            .send_message(ChatId(user.tg_user_id), notification)
+            .parse_mode(ParseMode::Html)
+            .await
+          {
+            Ok(_) => notified += 1,
+            Err(_) => failed += 1,
+          }
+        }
+
+        Ok(format!(
+          "✅ Build published!\n\n\
+          <b>Version:</b> {}\n\
+          <b>File:</b> {}\n\
+          <b>Created:</b> {}\n\n\
+          📢 <b>Notifications:</b>\n\
+          Sent: {} | Failed: {}",
+          build.version,
+          build.file_path,
+          utils::format_date(build.created_at),
+          notified,
+          failed
+        ))
       }
+      .await
     }
 
     Command::Yank(version) | Command::Deactivate(version) => {

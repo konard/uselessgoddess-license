@@ -114,6 +114,23 @@ impl<'a> User<'a> {
     Ok(user::Entity::find().count(self.db).await?)
   }
 
+  /// Get all users who have at least one active (non-blocked, non-expired) license.
+  /// An active license is one where: is_blocked = false AND expires_at > now.
+  pub async fn with_active_licenses(&self) -> Result<Vec<user::Model>> {
+    let now = Utc::now().naive_utc();
+
+    // Find users who have at least one active license
+    let users = user::Entity::find()
+      .inner_join(license::Entity)
+      .filter(license::Column::IsBlocked.eq(false))
+      .filter(license::Column::ExpiresAt.gt(now))
+      .group_by(user::Column::TgUserId)
+      .all(self.db)
+      .await?;
+
+    Ok(users)
+  }
+
   /// Find a user by their custom referral code
   pub async fn by_referral_code(
     &self,
