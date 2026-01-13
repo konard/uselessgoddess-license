@@ -394,6 +394,10 @@ async fn handle_about_referral(
       Callback::Profile.to_data(),
     )]]);
 
+  // Get bot username for invite link generation
+  let bot_username =
+    bot.inner.get_me().await.ok().and_then(|me| me.username.clone());
+
   match role {
     UserRole::Creator | UserRole::Admin => {
       let ref_stats = sv.referral.stats(bot.user_id).await.ok();
@@ -410,6 +414,13 @@ async fn handle_about_referral(
         ..
       }) = ref_stats
       {
+        let invite_link = bot_username
+          .as_ref()
+          .map(|username| {
+            format!("https://t.me/{}?start={}", username, code_display)
+          })
+          .unwrap_or_else(|| "Unable to generate link".to_string());
+
         let code_note = if custom_code.is_some() {
           format!(
             "\n<i>Tip: Users can also use your ID <code>{}</code> as referral code.</i>",
@@ -423,13 +434,16 @@ async fn handle_about_referral(
         format!(
           "🔗 <b>Referral Program (Creator)</b>\n\n\
           <b>Your referral code:</b> <code>{code}</code>\n\n\
+          <b>📎 Invite Link:</b>\n\
+          <code>{invite_link}</code>\n\n\
           <b>📊 Your Stats:</b>\n\
           Commission rate: {commission_rate}%\n\
           Customer discount: {discount_percent}%\n\
           Total sales: {total_sales}\n\
           Total earnings: {usdt}\n\n\
           <b>💡 How it works:</b>\n\
-          Share your code (<code>{code}</code>) with others. When they use your code:\n\
+          Share your invite link or code (<code>{code}</code>) with others. When they click the link:\n\
+          • Your referral code is applied automatically\n\
           • They get a {discount_percent}% discount on purchases\n\
           • You earn {commission_rate}% commission on their purchases\n\n\
           <i>Commissions are added to your balance automatically.</i>{code_note}",
@@ -437,26 +451,45 @@ async fn handle_about_referral(
           code = code_display,
         )
       } else {
+        let invite_link = bot_username
+          .as_ref()
+          .map(|username| {
+            format!("https://t.me/{}?start={}", username, code_display)
+          })
+          .unwrap_or_else(|| "Unable to generate link".to_string());
+
         format!(
           "🔗 <b>Referral Program (Creator)</b>\n\n\
           <b>Your referral code:</b> <code>{}</code>\n\n\
-          <i>Share this code with others to earn commission on their purchases.</i>",
-          code_display
+          <b>📎 Invite Link:</b>\n\
+          <code>{}</code>\n\n\
+          <i>Share this link with others to earn commission on their purchases.</i>",
+          code_display, invite_link
         )
       };
 
       bot.edit_with_keyboard(text, profile_back_kb).await?;
     }
     UserRole::User => {
+      let invite_link = bot_username
+        .as_ref()
+        .map(|username| {
+          format!("https://t.me/{}?start={}", username, bot.user_id)
+        })
+        .unwrap_or_else(|| "Unable to generate link".to_string());
+
       let text = format!(
         "🔗 <b>Referral Program</b>\n\n\
         <b>Your user ID:</b> <code>{code}</code>\n\n\
+        <b>📎 Invite Link:</b>\n\
+        <code>{invite_link}</code>\n\n\
         <b>💡 Invite Friends & Earn!</b>\n\
-        Share your user ID with friends. When they make a purchase using your ID:\n\
+        Share your invite link with friends. When they click and start the bot:\n\
+        • Your referral code is applied automatically\n\
         • You receive <b>{commission_rate}%</b> of their purchase as bonus balance\n\
         • This bonus can be used to buy new licenses\n\n\
-        <b>How to share:</b>\n\
-        Just give your ID (<code>{code}</code>) to your friends and ask them to use /ref command.\n\n\
+        <b>Manual method:</b>\n\
+        Friends can also use <code>/ref {code}</code> to set you as their referrer.\n\n\
         <i>Note: Only creators can have custom referral codes. Contact support to become a creator.</i>",
         code = bot.user_id
       );
