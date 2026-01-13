@@ -83,7 +83,7 @@ fn format_usdt(nano_usdt: i64) -> String {
 #[allow(dead_code)]
 pub enum UserCommand {
   #[command(description = "Start the bot and show main menu")]
-  Start,
+  Start(String),
   #[command(description = "Show help message")]
   Help,
   #[command(description = "Link an existing license to your account")]
@@ -145,7 +145,7 @@ pub enum AdminCommand {
 #[derive(BotCommands, Clone)]
 #[command(rename_rule = "lowercase")]
 pub enum Command {
-  Start,
+  Start(String),
   Help,
   Link(String),
   Ref(String),
@@ -225,7 +225,27 @@ pub async fn handle(
   let _ = sv.user.get_or_create(bot.user_id).await;
 
   match &cmd {
-    Command::Start => {
+    Command::Start(ref_code) => {
+      let ref_code = ref_code.trim();
+
+      // If a referral code is provided via deep link, try to apply it automatically
+      if !ref_code.is_empty() {
+        let user = sv.user.by_id(bot.user_id).await.ok().flatten();
+        let already_has_referrer =
+          user.as_ref().is_some_and(|u| u.referred_by.is_some());
+
+        if !already_has_referrer {
+          // Try to resolve and apply the referral code
+          if let Ok(referrer_id) = sv.referral.resolve_code(ref_code).await {
+            // Don't let users refer themselves
+            if referrer_id != bot.user_id {
+              let _ =
+                sv.user.set_referred_by(bot.user_id, Some(referrer_id)).await;
+            }
+          }
+        }
+      }
+
       let text = "<b>Yet Another Counter Strike Panel!</b>\n\n\
         Use the buttons below to navigate.\n\
         Read docs: https://yacsp.gitbook.io/yacsp\n\
