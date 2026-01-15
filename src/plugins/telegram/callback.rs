@@ -545,7 +545,8 @@ async fn handle_my_referrals(
   }
 
   // Get all users referred by this user
-  let referrals = sv.user.referred_by_user(bot.user_id).await.unwrap_or_default();
+  let referrals =
+    sv.user.referred_by_user(bot.user_id).await.unwrap_or_default();
 
   if referrals.is_empty() {
     let text = "👥 <b>My Referrals</b>\n\n\
