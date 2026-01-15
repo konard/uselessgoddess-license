@@ -143,6 +143,20 @@ impl<'a> User<'a> {
     Ok(user)
   }
 
+  /// Get all users referred by a specific user (their referrals)
+  /// Returns list of users who have this user as their referrer
+  pub async fn referred_by_user(
+    &self,
+    referrer_id: i64,
+  ) -> Result<Vec<user::Model>> {
+    let users = user::Entity::find()
+      .filter(user::Column::ReferredBy.eq(referrer_id))
+      .order_by_desc(user::Column::RegDate)
+      .all(self.db)
+      .await?;
+    Ok(users)
+  }
+
   /// Set custom referral code for a user (only creators/admins)
   pub async fn set_referral_code(
     &self,

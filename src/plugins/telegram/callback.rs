@@ -35,6 +35,7 @@ pub enum Callback {
   HaveLicense,
   SetRef,
   AboutReferral,
+  MyReferrals,
   Back,
 }
 
@@ -61,6 +62,7 @@ impl Callback {
       Callback::HaveLicense => "have_lic".to_string(),
       Callback::SetRef => "set_ref".to_string(),
       Callback::AboutReferral => "about_ref".to_string(),
+      Callback::MyReferrals => "my_refs".to_string(),
       Callback::Back => "back".to_string(),
     }
   }
@@ -80,6 +82,7 @@ impl Callback {
       "have_lic" => Some(Callback::HaveLicense),
       "set_ref" => Some(Callback::SetRef),
       "about_ref" => Some(Callback::AboutReferral),
+      "my_refs" => Some(Callback::MyReferrals),
       "back" => Some(Callback::Back),
       _ if data.starts_with("dl_ver:") => {
         Some(Callback::DownloadVersion(data[7..].to_string()))
@@ -291,6 +294,9 @@ pub async fn handle(
     Callback::AboutReferral => {
       handle_about_referral(&sv, &bot).await?;
     }
+    Callback::MyReferrals => {
+      handle_my_referrals(&sv, &bot).await?;
+    }
   }
 
   Ok(())
@@ -468,7 +474,19 @@ async fn handle_about_referral(
         )
       };
 
-      bot.edit_with_keyboard(text, profile_back_kb).await?;
+      // Creator keyboard with "My Referrals" button
+      let creator_kb = InlineKeyboardMarkup::new(vec![
+        vec![InlineKeyboardButton::callback(
+          "👥 My Referrals",
+          Callback::MyReferrals.to_data(),
+        )],
+        vec![InlineKeyboardButton::callback(
+          "« Back to Profile",
+          Callback::Profile.to_data(),
+        )],
+      ]);
+
+      bot.edit_with_keyboard(text, creator_kb).await?;
     }
     UserRole::User => {
       let invite_link = bot_username
@@ -497,6 +515,90 @@ async fn handle_about_referral(
       bot.edit_with_keyboard(text, profile_back_kb).await?;
     }
   }
+
+  Ok(())
+}
+
+/// Handle "My Referrals" button - shows list of users referred by this creator
+async fn handle_my_referrals(
+  sv: &Services<'_>,
+  bot: &ReplyBot,
+) -> ResponseResult<()> {
+  let user = sv.user.by_id(bot.user_id).await.ok().flatten();
+  let role = user.as_ref().map(|u| u.role.clone()).unwrap_or(UserRole::User);
+
+  let profile_back_kb =
+    InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
+      "« Back to Referral Info",
+      Callback::AboutReferral.to_data(),
+    )]]);
+
+  // Only creators and admins can view their referrals list
+  if role != UserRole::Creator && role != UserRole::Admin {
+    bot
+      .edit_with_keyboard(
+        "❌ Only creators can view their referrals list.",
+        profile_back_kb,
+      )
+      .await?;
+    return Ok(());
+  }
+
+  // Get all users referred by this user
+  let referrals = sv.user.referred_by_user(bot.user_id).await.unwrap_or_default();
+
+  if referrals.is_empty() {
+    let text = "👥 <b>My Referrals</b>\n\n\
+      <i>You haven't referred any users yet.</i>\n\n\
+      Share your referral code or invite link to start earning commissions!";
+    bot.edit_with_keyboard(text, profile_back_kb).await?;
+    return Ok(());
+  }
+
+  let mut text = format!(
+    "👥 <b>My Referrals</b>\n\n\
+    <b>Total referred users:</b> {}\n\n",
+    referrals.len()
+  );
+
+  // Show list of referred users with their info
+  for (i, referral) in referrals.iter().enumerate() {
+    let username = bot.infer_username(ChatId(referral.tg_user_id)).await;
+    let reg_date = utils::format_date(referral.reg_date);
+
+    // Check if this user has any active licenses
+    let has_license = sv
+      .license
+      .by_user(referral.tg_user_id, false)
+      .await
+      .map(|l| !l.is_empty())
+      .unwrap_or(false);
+
+    let status_icon = if has_license { "✅" } else { "⚪" };
+
+    text.push_str(&format!(
+      "<b>{}.</b> {} {}\n\
+      <code>{}</code> | Joined: {}\n\n",
+      i + 1,
+      status_icon,
+      username,
+      referral.tg_user_id,
+      reg_date
+    ));
+
+    // Limit to 15 entries to avoid message being too long
+    if i >= 14 {
+      let remaining = referrals.len() - 15;
+      if remaining > 0 {
+        text.push_str(&format!("<i>...and {} more</i>\n", remaining));
+      }
+      break;
+    }
+  }
+
+  text.push_str("\n<i>✅ = has active license, ⚪ = no active license</i>");
+
+  bot.edit_with_keyboard(text, profile_back_kb).await?;
 
   Ok(())
 }
