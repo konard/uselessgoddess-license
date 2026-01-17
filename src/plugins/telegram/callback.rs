@@ -806,7 +806,7 @@ async fn handle_buy_menu(
     "💳 <b>Buy License</b>\n\n\
     <b>Your Balance:</b> {}\n\n\
     <b>🧪 Try it first:</b>\n\
-    • 1 Day Trial: <b>{DAY_TRIAL_PRICE:.2} USDT</b> <i>(no discounts)</i>\n\n\
+    • 1 Day Trial: <b>{DAY_TRIAL_PRICE:.2} USDT</b>\n\n\
     <b>Pricing:</b>\n",
     balance_str
   );
