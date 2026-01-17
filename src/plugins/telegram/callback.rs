@@ -979,9 +979,7 @@ async fn handle_buy_plan(
   {
     Ok(new_balance) => {
       // If user was referred and this is NOT a trial, process referral commission
-      if !is_trial
-        && let Some(referrer_id) = referred_by
-      {
+      if !is_trial && let Some(referrer_id) = referred_by {
         let _ = sv.referral.record_sale(referrer_id, price).await;
         // Add commission to referrer's balance
         let referrer_user = sv.user.by_id(referrer_id).await.ok().flatten();
