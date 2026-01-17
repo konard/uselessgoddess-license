@@ -765,10 +765,12 @@ async fn handle_download_version(
 }
 
 /// Price constants in USDT
+const DAY_TRIAL_PRICE: f64 = 1.0;
 const MONTH_PRICE: f64 = 10.0;
 const QUARTER_PRICE: f64 = 25.0;
 
 /// Nano USDT price constants
+const DAY_TRIAL_PRICE_NANO: i64 = NANO_USDT;
 const MONTH_PRICE_NANO: i64 = 10 * NANO_USDT;
 const QUARTER_PRICE_NANO: i64 = 25 * NANO_USDT;
 
@@ -796,12 +798,15 @@ async fn handle_buy_menu(
   let month_nano = (month_price * NANO_USDT as f64) as i64;
   let quarter_nano = (quarter_price * NANO_USDT as f64) as i64;
 
+  let can_buy_trial = balance >= DAY_TRIAL_PRICE_NANO;
   let can_buy_month = balance >= month_nano;
   let can_buy_quarter = balance >= quarter_nano;
 
   let mut text = format!(
     "💳 <b>Buy License</b>\n\n\
     <b>Your Balance:</b> {}\n\n\
+    <b>🧪 Try it first:</b>\n\
+    • 1 Day Trial: <b>{DAY_TRIAL_PRICE:.2} USDT</b> <i>(no discounts)</i>\n\n\
     <b>Pricing:</b>\n",
     balance_str
   );
@@ -825,20 +830,28 @@ async fn handle_buy_menu(
     ));
   }
 
-  if can_buy_month {
+  if can_buy_trial {
     text.push_str("\n<i>Select a plan to purchase with your balance:</i>");
   } else {
     text.push_str(&format!(
-      "\n<i>💡 You need {} more to buy 1 month license.</i>",
-      format_usdt(month_nano - balance)
+      "\n<i>💡 You need {} more to buy a trial license.</i>",
+      format_usdt(DAY_TRIAL_PRICE_NANO - balance)
     ));
   }
 
   if referred_by.is_none() {
-    text.push_str("\n\n<i>💡 Tip: Set a referral code to get a discount!</i>");
+    text.push_str("\n\n<i>💡 Tip: Set a referral code to get a discount on monthly plans!</i>");
   }
 
   let mut rows = Vec::new();
+
+  // Trial button (no discount applied)
+  if can_buy_trial {
+    rows.push(vec![InlineKeyboardButton::callback(
+      format!("🧪 1 Day Trial ({:.2} USDT)", DAY_TRIAL_PRICE),
+      Callback::BuyPlan("trial".to_string()).to_data(),
+    )]);
+  }
 
   // Buy buttons (only enabled if sufficient balance)
   if can_buy_month {
@@ -902,14 +915,16 @@ async fn handle_buy_plan(
 
   let discount_percent: i32 = sv.referral.discount_percent(referred_by).await;
 
-  let (price, days, plan_name) = match plan {
+  // Trial plan is not affected by discounts - fixed $1 price
+  let (price, days, plan_name, is_trial) = match plan {
+    "trial" => (DAY_TRIAL_PRICE_NANO, 1u64, "1 Day Trial", true),
     "month" => {
       let price = if discount_percent > 0 {
         MONTH_PRICE_NANO * (100 - discount_percent) as i64 / 100
       } else {
         MONTH_PRICE_NANO
       };
-      (price, 30u64, "1 Month")
+      (price, 30u64, "1 Month", false)
     }
     "quarter" => {
       let price = if discount_percent > 0 {
@@ -917,7 +932,7 @@ async fn handle_buy_plan(
       } else {
         QUARTER_PRICE_NANO
       };
-      (price, 90u64, "3 Months")
+      (price, 90u64, "3 Months", false)
     }
     _ => {
       bot.edit_with_keyboard("❌ Invalid plan.", back_keyboard()).await?;
@@ -948,6 +963,9 @@ async fn handle_buy_plan(
     return Ok(());
   }
 
+  // For trial plan, don't pass referrer (no commission for trial purchases)
+  let spend_referrer = if is_trial { None } else { referred_by };
+
   // Purchase the license
   match sv
     .balance
@@ -955,13 +973,15 @@ async fn handle_buy_plan(
       bot.user_id,
       price,
       Some(format!("License purchase: {}", plan_name)),
-      referred_by,
+      spend_referrer,
     )
     .await
   {
     Ok(new_balance) => {
-      // If user was referred, process referral commission
-      if let Some(referrer_id) = referred_by {
+      // If user was referred and this is NOT a trial, process referral commission
+      if !is_trial
+        && let Some(referrer_id) = referred_by
+      {
         let _ = sv.referral.record_sale(referrer_id, price).await;
         // Add commission to referrer's balance
         let referrer_user = sv.user.by_id(referrer_id).await.ok().flatten();
@@ -974,7 +994,7 @@ async fn handle_buy_plan(
         }
       }
 
-      // Generate license
+      // Generate license (use Pro type for paid trial as well)
       match sv
         .license
         .create(bot.user_id, crate::entity::license::LicenseType::Pro, days)
