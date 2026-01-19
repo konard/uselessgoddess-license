@@ -562,20 +562,22 @@ async fn handle_my_referrals(
     referrals.len()
   );
 
+  let now = Utc::now().naive_utc();
+
   // Show list of referred users with their info
   for (i, referral) in referrals.iter().enumerate() {
     let username = bot.infer_username(ChatId(referral.tg_user_id)).await;
     let reg_date = utils::format_date(referral.reg_date);
 
-    // Check if this user has any active licenses
-    let has_license = sv
+    // Check if this user has any active (non-expired) licenses
+    let has_active_license = sv
       .license
       .by_user(referral.tg_user_id, false)
       .await
-      .map(|l| !l.is_empty())
+      .map(|licenses| licenses.iter().any(|l| l.expires_at > now))
       .unwrap_or(false);
 
-    let status_icon = if has_license { "✅" } else { "⚪" };
+    let status_icon = if has_active_license { "✅" } else { "⚪" };
 
     text.push_str(&format!(
       "<b>{}.</b> {} {}\n\
@@ -586,20 +588,12 @@ async fn handle_my_referrals(
       referral.tg_user_id,
       reg_date
     ));
-
-    // Limit to 15 entries to avoid message being too long
-    if i >= 14 {
-      let remaining = referrals.len() - 15;
-      if remaining > 0 {
-        text.push_str(&format!("<i>...and {} more</i>\n", remaining));
-      }
-      break;
-    }
   }
 
   text.push_str("\n<i>✅ = has active license, ⚪ = no active license</i>");
 
-  bot.edit_with_keyboard(text, profile_back_kb).await?;
+  // Split message into chunks and send with keyboard on the last chunk
+  bot.reply_html_chunked_with_keyboard(text, profile_back_kb).await?;
 
   Ok(())
 }
