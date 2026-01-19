@@ -160,6 +160,41 @@ impl ReplyBot {
     Ok(last_msg.unwrap())
   }
 
+  /// Send a potentially long message by splitting it into chunks.
+  /// The keyboard is only attached to the last message.
+  /// Returns the last message sent, or error if any chunk fails.
+  pub async fn reply_html_chunked_with_keyboard(
+    &self,
+    text: impl Into<String>,
+    keyboard: InlineKeyboardMarkup,
+  ) -> ResponseResult<Message> {
+    let chunks = utils::chunk_message(&text.into(), 0);
+    let total_chunks = chunks.len();
+    let mut last_msg = None;
+
+    for (i, chunk) in chunks.into_iter().enumerate() {
+      let is_last = i == total_chunks - 1;
+      last_msg = Some(if is_last {
+        // Attach keyboard only to the last message
+        self
+          .inner
+          .send_message(self.chat_id, chunk)
+          .parse_mode(ParseMode::Html)
+          .reply_markup(keyboard.clone())
+          .await?
+      } else {
+        self
+          .inner
+          .send_message(self.chat_id, chunk)
+          .parse_mode(ParseMode::Html)
+          .await?
+      });
+    }
+
+    // chunks is never empty, so last_msg is always Some
+    Ok(last_msg.unwrap())
+  }
+
   async fn reply_with_keyboard(
     &self,
     text: impl Into<String>,
