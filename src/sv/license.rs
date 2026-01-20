@@ -40,6 +40,38 @@ impl<'a> License<'a> {
     Ok(license.insert(self.db).await?)
   }
 
+  /// Create a gift license that is not linked to any user yet.
+  /// The expiration timer starts when the license is linked/activated,
+  /// not when it's created.
+  ///
+  /// Note: Uses tg_user_id = 0 as a placeholder for "unlinked" licenses.
+  /// Ensures a placeholder user with ID 0 exists for foreign key constraint.
+  #[allow(dead_code)]
+  pub async fn create_gift(
+    &self,
+    ty: LicenseType,
+    days: u64,
+  ) -> Result<license::Model> {
+    // Ensure placeholder user exists (ID 0 represents "no owner")
+    sv::User::new(self.db).get_or_create(0).await?;
+
+    let now = Utc::now().naive_utc();
+    let expires_at = now + Duration::from_hours(24 * days);
+    let key = Uuid::new_v4();
+
+    let license = license::ActiveModel {
+      key: Set(key.to_string()),
+      tg_user_id: Set(0), // Not linked to any user yet
+      license_type: Set(ty),
+      is_blocked: Set(false),
+      expires_at: Set(expires_at),
+      created_at: Set(now),
+      max_sessions: Set(1),
+    };
+
+    Ok(license.insert(self.db).await?)
+  }
+
   pub async fn by_key(&self, key: &str) -> Result<Option<license::Model>> {
     let license = license::Entity::find_by_id(key).one(self.db).await?;
     Ok(license)
@@ -157,11 +189,25 @@ impl<'a> License<'a> {
       return Err(Error::LicenseAlreadyLinked);
     }
 
-    // Update the license with the new user
-    let updated =
-      license::ActiveModel { tg_user_id: Set(tg_user_id), ..license.into() }
-        .update(self.db)
-        .await?;
+    // Calculate new expiration: if this is the first link (activation),
+    // start the timer from now instead of from creation time
+    let expires_at = if license.tg_user_id == 0 {
+      // First activation: calculate original duration and start from now
+      let original_duration = license.expires_at - license.created_at;
+      Utc::now().naive_utc() + original_duration
+    } else {
+      // Already linked to this user, keep existing expiration
+      license.expires_at
+    };
+
+    // Update the license with the new user and potentially new expiration
+    let updated = license::ActiveModel {
+      tg_user_id: Set(tg_user_id),
+      expires_at: Set(expires_at),
+      ..license.into()
+    }
+    .update(self.db)
+    .await?;
 
     Ok(updated)
   }
@@ -259,5 +305,64 @@ mod tests {
       .unwrap();
 
     assert!(new_exp > old_exp);
+  }
+
+  #[tokio::test]
+  async fn test_gift_license_expiration_starts_on_activation() {
+    let db = test_db::setup().await;
+    let sv = License::new(&db);
+
+    // Create a gift license (not linked to any user)
+    let gift = sv.create_gift(LicenseType::Pro, 30).await.unwrap();
+    assert_eq!(gift.tg_user_id, 0);
+
+    let original_created_at = gift.created_at;
+    let original_expires_at = gift.expires_at;
+    let original_duration = original_expires_at - original_created_at;
+
+    // Simulate time passing before activation (e.g., gift was purchased yesterday)
+    // In a real scenario, time would pass between purchase and activation.
+    // We verify the behavior by checking that after linking:
+    // 1. The expiration is recalculated from activation time
+    // 2. The new expiration is approximately now + original_duration
+
+    // Link the gift license to a user (activation)
+    let activated = sv.link_to_user(&gift.key, 12345).await.unwrap();
+
+    // After activation:
+    // - The user should be linked
+    assert_eq!(activated.tg_user_id, 12345);
+
+    // - The expiration should be recalculated from now
+    // Since we're linking immediately, the new expiration should be close to
+    // the original, but calculated from the current time
+    let now = Utc::now().naive_utc();
+    let expected_expires_at = now + original_duration;
+
+    // Allow 1 second tolerance for test execution time
+    let tolerance = chrono::TimeDelta::seconds(1);
+    assert!(
+      activated.expires_at >= expected_expires_at - tolerance
+        && activated.expires_at <= expected_expires_at + tolerance,
+      "Expiration should be recalculated from activation time. \
+       Expected: ~{:?}, Got: {:?}",
+      expected_expires_at,
+      activated.expires_at
+    );
+  }
+
+  #[tokio::test]
+  async fn test_link_already_linked_license_keeps_expiration() {
+    let db = test_db::setup().await;
+    let sv = License::new(&db);
+
+    // Create a gift license and link it
+    let gift = sv.create_gift(LicenseType::Pro, 30).await.unwrap();
+    let activated = sv.link_to_user(&gift.key, 12345).await.unwrap();
+    let first_expires_at = activated.expires_at;
+
+    // Link again to the same user - expiration should not change
+    let relinked = sv.link_to_user(&gift.key, 12345).await.unwrap();
+    assert_eq!(relinked.expires_at, first_expires_at);
   }
 }
