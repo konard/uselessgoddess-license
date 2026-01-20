@@ -692,7 +692,7 @@ async fn handle_admin_command(
         // /buy <duration> - generate new license for admin
         None => {
           let days = duration.as_secs() / 86400;
-          sv.license.create(bot.user_id, LicenseType::Pro, days).await.map(
+          sv.license.create_gift(LicenseType::Pro, days).await.map(
             |l| {
               format!(
                 "✅ Key created ({}):\n<code>{}</code>\n\
