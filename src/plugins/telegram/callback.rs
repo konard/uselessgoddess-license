@@ -1121,9 +1121,6 @@ async fn handle_add_funds(
       "💵 Custom Amount",
       Callback::PayCustomAmount.to_data(),
     )]);
-  }
-
-  if pending_count > 0 {
     rows.push(vec![InlineKeyboardButton::callback(
       "🔄 Check Payments",
       Callback::CheckPayments.to_data(),
